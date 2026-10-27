@@ -1,0 +1,308 @@
+{# project-board -- Copyright (C) 2026 theunknownmuncher <theunknownmuncher@protonmail.com>
+   SPDX-License-Identifier: GPL-3.0-or-later #}
+{# -- AI-GENERATED CODE (Qwen3.8 Flash Next) :: (2026-10-26) status:reviewed harness:openlumara --
+   The project board panel. It is dropped into the chat panel's below_header slot and,
+   while open, hides the message history (and optionally the chat input), which is what
+   makes it *be* the chat panel. Logic lives in assets/js/project_board.js. #}
+
+{% macro below_header() %}
+<div class="pb-board" id="project-board" x-data="projectBoardComponent()"
+     x-show="open" x-cloak @keydown.window="shortcuts($event)"
+     x-init="mount(); $watch('$store.stream.state', (state) => { if (state === 'idle' && open) load() })">
+
+    <div class="pb-toolbar">
+        <div class="pb-toolbar-group pb-identity">
+            <span class="pb-mark">{% include 'project-board/svg/board.svg' %}</span>
+            <span class="pb-title">Project board</span>
+            <span class="pb-summary" x-show="stats" x-cloak>
+                <span x-text="stats ? stats.total + ' cards' : ''"></span>
+                <span class="pb-dot">·</span>
+                <span x-text="stats ? stats.progress + '% done' : ''"></span>
+                <template x-if="stats && stats.points_total">
+                    <span x-text="'· ' + (stats.points_total - stats.points_done) + ' pts open'"></span>
+                </template>
+                <template x-if="stats && stats.blocked">
+                    <span class="pb-pill warn" x-text="stats.blocked + ' blocked'" title="blocked cards"></span>
+                </template>
+                <template x-if="stats && stats.overdue">
+                    <span class="pb-pill danger" x-text="stats.overdue + ' overdue'" title="cards past their due date"></span>
+                </template>
+            </span>
+        </div>
+
+        <div class="pb-toolbar-group pb-filters">
+            <input class="pb-input pb-search" id="pb-search" type="search" placeholder="search cards"
+                   title="search cards ( / )"
+                   x-model.debounce.250ms="query">
+
+            <select class="pb-input" x-model="filterAssignee" title="filter by assignee">
+                <option value="">anyone</option>
+                <template x-for="name in assignees" :key="name">
+                    <option :value="name" x-text="name"></option>
+                </template>
+            </select>
+
+            <select class="pb-input" x-model="filterPriority" title="filter by priority">
+                <option value="">any priority</option>
+                <template x-for="name in options.priorities" :key="name">
+                    <option :value="name" x-text="name"></option>
+                </template>
+            </select>
+
+            <select class="pb-input" x-model="filterType" title="filter by type">
+                <option value="">any type</option>
+                <template x-for="name in options.types" :key="name">
+                    <option :value="name" x-text="name"></option>
+                </template>
+            </select>
+
+            <select class="pb-input" x-model="filterLabel" title="filter by label">
+                <option value="">any label</option>
+                <template x-for="name in labels" :key="name">
+                    <option :value="name" x-text="'#'+name"></option>
+                </template>
+            </select>
+
+            <select class="pb-input" x-model="sort" title="order of cards inside a column"
+                    @change="localStorage.setItem('pb.sort', sort)">
+                <option value="manual">board order</option>
+                <option value="priority">by priority</option>
+                <option value="points">by points</option>
+                <option value="due">by due date</option>
+                <option value="added">newest first</option>
+                <option value="title">alphabetical</option>
+            </select>
+
+            <label class="pb-check" title="hide columns that count as finished work">
+                <input type="checkbox" x-model="hideDone"><span>hide done</span>
+            </label>
+
+            <button type="button" class="pb-btn" x-show="filtersActive()" x-cloak @click="clearFilters()">clear</button>
+        </div>
+
+        <div class="pb-toolbar-group pb-actions">
+            <button type="button" class="pb-btn primary" title="new card (n)" @click="openCreate()">
+                {% include 'svg/add.svg' %}<span>new card</span>
+            </button>
+            <button type="button" class="pb-btn icon" title="reload the board (r)" @click="refresh(true)">
+                {% include 'svg/reload.svg' %}
+            </button>
+            <button type="button" class="pb-btn icon" title="keyboard shortcuts" :class="{ active: showHelp }"
+                    @click="showHelp = !showHelp">?</button>
+            <button type="button" class="pb-btn icon" title="back to the chat (Esc)" @click="hide()">
+                {% include 'svg/cross.svg' %}
+            </button>
+        </div>
+    </div>
+
+    <div class="pb-progress" x-show="stats && stats.total" x-cloak
+         :title="stats ? stats.done + ' of ' + stats.total + ' cards are in a done column' : ''">
+        <div class="pb-progress-bar" :style="`width: ${stats ? stats.progress : 0}%`"></div>
+        <span class="pb-progress-label"
+              x-text="stats ? stats.done + '/' + stats.total + ' done' : ''"></span>
+    </div>
+
+    <div class="pb-help" x-show="showHelp" x-cloak>
+        <span><b>alt + b</b> show / hide the board</span>
+        <span><b>n</b> new card</span>
+        <span><b>/</b> search</span>
+        <span><b>r</b> reload</span>
+        <span><b>Esc</b> back to the chat</span>
+        <span><b>click a card</b> open it</span>
+        <span><b>drag a card</b> move or prioritize it</span>
+        <span><b>alt + &larr; / &rarr;</b> move a focused card between columns</span>
+        <span><b>alt + &uarr; / &darr;</b> reorder a focused card</span>
+        <span><b>double-click a column title</b> rename it</span>
+        <span>ask your AI to run the board: it has tools for all of this and its changes appear instantly</span>
+    </div>
+
+    <div class="pb-empty" x-show="loaded && stats && stats.total === 0 && !loading" x-cloak>
+        <p><b>Nothing on the board yet.</b></p>
+        <p>Add a card below, or ask your AI to break a project down into user stories and tasks.</p>
+        <button type="button" class="pb-btn primary" @click="openCreate()">create the first card</button>
+    </div>
+
+    <div class="pb-columns" :class="{ dim: loading }">
+        <template x-for="column in shownColumns()" :key="column.id">
+            <section class="pb-column"
+                     :class="{ 'over-wip': overWip(column), 'is-done': column.done, 'drop-column': drag.kind === 'column' && drag.target === column.id }"
+                     @dragover="onDragOver($event, column)"
+                     @drop.prevent="drop($event, column)">
+
+                <header class="pb-column-header">
+                    <span class="pb-grip" title="drag to reorder columns"
+                          draggable="true" @dragstart="startColumnDrag($event, column)" @dragend="endColumnDrag()">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>
+                    </span>
+
+                    <template x-if="renaming !== column.id">
+                        <h3 class="pb-column-name" x-text="column.name" title="double-click to rename"
+                            @dblclick="startRename(column)"></h3>
+                    </template>
+                    <template x-if="renaming === column.id">
+                        <input class="pb-input pb-rename" type="text" x-model="renameValue"
+                               @keydown.enter.prevent="commitRename(column)"
+                               @keydown.escape.prevent="renaming = null"
+                               @blur="commitRename(column)"
+                               x-init="$nextTick(() => { $el.focus(); $el.select(); })">
+                    </template>
+
+                    <span class="pb-column-count" x-text="visibleCards(column.id).length"></span>
+                    <span class="pb-column-points" x-show="columnPoints(column.id)"
+                          x-text="columnPoints(column.id) + ' pts'"></span>
+                    <span class="pb-column-wip" x-show="column.wip_limit"
+                          :class="{ breach: overWip(column) }"
+                          x-text="'wip ' + columnCards(column.id).length + '/' + column.wip_limit"></span>
+
+                    <div class="pb-column-actions">
+                        <button type="button" class="pb-icon" title="add a card here" @click="startQuickAdd(column.id)">
+                            {% include 'svg/add.svg' %}
+                        </button>
+                        <button type="button" class="pb-icon" title="column settings"
+                                :class="{ active: editingColumn === column.id }"
+                                @click="toggleColumnEditor(column)">
+                            {% include 'svg/pencil.svg' %}
+                        </button>
+                    </div>
+                </header>
+
+                <div class="pb-column-editor" x-show="editingColumn === column.id" x-cloak>
+                    <label class="pb-check">
+                        <span>wip limit</span>
+                        <input class="pb-input pb-number" type="number" min="0"
+                               title="how many cards may be in here at once (0 is no limit)"
+                               x-model="columnForm.wip_limit">
+                    </label>
+                    <label class="pb-check" title="cards in this column count as finished work">
+                        <input type="checkbox" x-model="columnForm.done"><span>done</span>
+                    </label>
+                    <div class="pb-editor-actions">
+                        <button type="button" class="pb-icon" title="move column left"
+                                x-show="columnIndex(column.id) > 0"
+                                @click="shiftColumnOrder(column, 'previous')">&larr;</button>
+                        <button type="button" class="pb-icon" title="move column right"
+                                x-show="columnIndex(column.id) < columns.length - 1"
+                                @click="shiftColumnOrder(column, 'next')">&rarr;</button>
+                        <button type="button" class="pb-icon danger" title="delete this column"
+                                x-show="columns.length > 1"
+                                @click="deleteColumn(column)">
+                            {% include 'svg/trash.svg' %}
+                        </button>
+                        <button type="button" class="pb-btn" @click="editingColumn = null">cancel</button>
+                        <button type="button" class="pb-btn primary" @click="saveColumn(column)">save</button>
+                    </div>
+                </div>
+
+                <div class="pb-cards">
+                    <template x-for="(card, index) in visibleCards(column.id)" :key="card.id">
+                        <div class="pb-slot">
+                            <div class="pb-dropline" x-show="showDropLine(column.id, index)" x-cloak></div>
+
+                            <article class="pb-card" :data-card-id="card.id" :class="{
+                                     blocked: card.blocked, overdue: card.overdue,
+                                     dragging: drag.card === card.id }"
+                                     draggable="true" tabindex="0" role="button"
+                                     @dragstart="startCardDrag($event, card)" @dragend="endCardDrag()"
+                                     @click="openEdit(card)" @keydown.enter.prevent="openEdit(card)"
+                                     @keydown.alt.arrow-left.prevent.stop="shiftColumn(card, 'previous')"
+                                     @keydown.alt.arrow-right.prevent.stop="shiftColumn(card, 'next')"
+                                     @keydown.alt.arrow-up.prevent.stop="nudge(card, 'up')"
+                                     @keydown.alt.arrow-down.prevent.stop="nudge(card, 'down')">
+
+                                <div class="pb-card-top">
+                                    <span class="pb-type" :class="'type-'+card.type" :title="card.type"
+                                          x-text="typeIcon(card)"></span>
+                                    <span class="pb-priority" :class="'prio-'+card.priority" x-text="card.priority"></span>
+                                    <span class="pb-card-title" x-text="card.title"></span>
+                                </div>
+
+                                <div class="pb-labels" x-show="(card.labels || []).length">
+                                    <template x-for="label in (card.labels || [])" :key="label">
+                                        <span class="pb-label" x-text="'#'+label"></span>
+                                    </template>
+                                </div>
+
+                                <div class="pb-card-footer">
+                                    <span class="pb-points" x-show="card.points" title="story points"
+                                          x-text="card.points + 'p'"></span>
+                                    <span class="pb-due" x-show="card.due" :class="{ late: card.overdue }"
+                                          :title="'due ' + card.due" x-text="dueLabel(card)"></span>
+                                    <span class="pb-note-count" x-show="(card.comments || []).length"
+                                          :title="(card.comments || []).length + ' comments'"
+                                          x-text="(card.comments || []).length">
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                                    </span>
+                                    <span class="pb-card-right">
+                                        <span class="pb-flag" x-show="card.blocked">blocked</span>
+                                        <span class="pb-avatar" x-show="card.assignee"
+                                              :title="card.assignee" x-text="initials(card)"></span>
+                                    </span>
+                                    <span class="pb-card-arrows">
+                                        <button type="button" class="pb-icon" title="previous column (alt + left)"
+                                                @click.stop="shiftColumn(card, 'previous')">&larr;</button>
+                                        <button type="button" class="pb-icon" title="next column (alt + right)"
+                                                @click.stop="shiftColumn(card, 'next')">&rarr;</button>
+                                    </span>
+                                </div>
+                            </article>
+                        </div>
+                    </template>
+
+                    <div class="pb-dropline tail" x-show="showDropLine(column.id, visibleCards(column.id).length)" x-cloak></div>
+
+                    <div class="pb-column-empty" x-show="visibleCards(column.id).length === 0">
+                        <span x-show="!filtersActive()">drop cards here</span>
+                        <span x-show="filtersActive()">nothing here matches</span>
+                    </div>
+
+                    <template x-if="quickAdd && quickAdd.column === column.id">
+                        <div class="pb-quickadd">
+                            <textarea class="pb-input" rows="2" placeholder="card title, enter to add"
+                                      x-model="quickAdd.text"
+                                      @keydown.enter.prevent="commitQuickAdd()"
+                                      @keydown.escape.prevent="quickAdd = null"
+                                      x-init="$nextTick(() => $el.focus())"></textarea>
+                            <div class="pb-editor-actions">
+                                <button type="button" class="pb-btn" @click="quickAdd = null">close</button>
+                                <button type="button" class="pb-btn primary" @click="commitQuickAdd()">add</button>
+                                <button type="button" class="pb-btn" title="open the full editor instead"
+                                        @click="openCreate(column.id)">more&hellip;</button>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </section>
+        </template>
+
+        <section class="pb-column pb-new-column">
+            <template x-if="!newColumn.adding">
+                <button type="button" class="pb-add-column" @click="startAddColumn()">
+                    {% include 'svg/add.svg' %}<span>column</span>
+                </button>
+            </template>
+            <template x-if="newColumn.adding">
+                <div class="pb-quickadd">
+                    <input class="pb-input" type="text" placeholder="column name" x-model="newColumn.name"
+                           @keydown.enter.prevent="commitAddColumn()"
+                           @keydown.escape.prevent="newColumn.adding = false"
+                           x-init="$nextTick(() => $el.focus())">
+                    <div class="pb-editor-actions">
+                        <button type="button" class="pb-btn" @click="newColumn.adding = false">cancel</button>
+                        <button type="button" class="pb-btn primary" @click="commitAddColumn()">add column</button>
+                    </div>
+                </div>
+            </template>
+        </section>
+    </div>
+
+    <div class="pb-statusbar">
+        <span class="pb-loading" x-show="loading">loading..</span>
+        <span class="pb-refreshed" x-show="refreshedAt && !loading"
+              x-text="'updated ' + timeAgo(refreshedAt)"></span>
+        <span class="pb-notice" x-show="notice" x-text="notice" x-cloak></span>
+        <span class="pb-error" x-show="error" x-text="error" x-cloak></span>
+        <span class="pb-count-hint" x-show="filtersActive() && !loading"
+              x-text="visibleCount() + ' of ' + (stats ? stats.total : 0) + ' cards shown'"></span>
+    </div>
+</div>
+{% endmacro %}

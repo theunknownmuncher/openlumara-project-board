@@ -1,0 +1,132 @@
+{# project-board -- Copyright (C) 2026 theunknownmuncher <theunknownmuncher@protonmail.com>
+   SPDX-License-Identifier: GPL-3.0-or-later #}
+{# -- AI-GENERATED CODE (Qwen3.8 Flash Next) :: (2026-10-26) status:reviewed harness:openlumara --
+   Card dialog: create a card, or edit one (fields, comments, move, duplicate, delete).
+   Auto-discovered from templates/modals/, opened with $store.ui.openModal('project_board_card'). #}
+
+<template x-if="$store.ui.currentModal === 'project_board_card' && $store.projectBoard && $store.projectBoard.editing"
+          x-cloak>
+    <div class="modal pb-card-modal" x-data="projectBoardCardModal()"
+         @keydown.escape.window="$store.projectBoard.closeModal()">
+        <div class="header">
+            <h2 x-text="$store.projectBoard.editing.id ? 'Card ' + $store.projectBoard.editing.id : 'New card'"></h2>
+            <button class="close" @click="$store.projectBoard.closeModal()" aria-label="Close the card editor">&times;</button>
+        </div>
+
+        <div class="pb-modal-body">
+            <label class="pb-field-label" for="pb-title">title</label>
+            <input id="pb-title" class="pb-input" type="text" placeholder="what needs to happen?"
+                   x-model="$store.projectBoard.form.title"
+                   @keydown.ctrl.enter.prevent="$store.projectBoard.saveCard()"
+                   x-init="$nextTick(() => $el.focus())">
+
+            <div class="pb-field-row">
+                <div class="pb-field-col">
+                    <label class="pb-field-label" for="pb-type">type</label>
+                    <select id="pb-type" class="pb-input" x-model="$store.projectBoard.form.type">
+                        <template x-for="name in $store.projectBoard.options.types" :key="name">
+                            <option :value="name" x-text="name"></option>
+                        </template>
+                    </select>
+                </div>
+                <div class="pb-field-col">
+                    <label class="pb-field-label" for="pb-priority">priority</label>
+                    <select id="pb-priority" class="pb-input" x-model="$store.projectBoard.form.priority">
+                        <template x-for="name in $store.projectBoard.options.priorities" :key="name">
+                            <option :value="name" x-text="name"></option>
+                        </template>
+                    </select>
+                </div>
+                <div class="pb-field-col">
+                    <label class="pb-field-label" for="pb-column">column</label>
+                    <select id="pb-column" class="pb-input" x-model="$store.projectBoard.form.column">
+                        <template x-for="column in $store.projectBoard.columns" :key="column.id">
+                            <option :value="column.id" x-text="column.name"></option>
+                        </template>
+                    </select>
+                </div>
+            </div>
+
+            <div class="pb-field-row">
+                <div class="pb-field-col">
+                    <label class="pb-field-label" for="pb-assignee">assignee</label>
+                    <input id="pb-assignee" class="pb-input" type="text" placeholder="nobody"
+                           x-model="$store.projectBoard.form.assignee">
+                </div>
+                <div class="pb-field-col pb-narrow">
+                    <label class="pb-field-label" for="pb-points">points</label>
+                    <input id="pb-points" class="pb-input" type="number" min="0" step="1"
+                           x-model="$store.projectBoard.form.points">
+                </div>
+                <div class="pb-field-col pb-narrow">
+                    <label class="pb-field-label" for="pb-due">due</label>
+                    <input id="pb-due" class="pb-input" type="date" x-model="$store.projectBoard.form.due">
+                </div>
+            </div>
+
+            <label class="pb-field-label" for="pb-labels">labels</label>
+            <input id="pb-labels" class="pb-input" type="text" placeholder="backend, ux"
+                   x-model="$store.projectBoard.form.labels">
+            <div class="pb-label-preview" x-show="$store.projectBoard.labelsInForm().length" x-cloak>
+                <template x-for="label in $store.projectBoard.labelsInForm()" :key="label">
+                    <span class="pb-label" x-text="'#'+label"></span>
+                </template>
+            </div>
+
+            <label class="pb-field-label" for="pb-description">description</label>
+            <textarea id="pb-description" class="pb-input" rows="5"
+                      placeholder="user story, acceptance criteria, links, notes.."
+                      x-model="$store.projectBoard.form.description"></textarea>
+
+            <label class="pb-check pb-blocked">
+                <input type="checkbox" x-model="$store.projectBoard.form.blocked">
+                <span>blocked (waiting on something outside this card)</span>
+            </label>
+
+            <template x-if="card">
+                <div class="pb-comments">
+                    <div class="pb-comments-header">
+                        <span>comments</span>
+                        <span class="pb-meta" x-text="'created ' + timeAgo(card.created)"></span>
+                    </div>
+
+                    <template x-for="comment in $store.projectBoard.comments" :key="comment.id">
+                        <div class="pb-comment">
+                            <span class="pb-comment-author" x-text="comment.author"></span>
+                            <span class="pb-comment-text" x-text="comment.text"></span>
+                            <button type="button" class="pb-icon danger" title="delete comment"
+                                    @click="$store.projectBoard.deleteComment(card, comment)">&times;</button>
+                        </div>
+                    </template>
+
+                    <div class="pb-comment-add">
+                        <textarea class="pb-input" rows="2" placeholder="leave a note on this card"
+                                  x-model="$store.projectBoard.commentText"
+                                  @keydown.ctrl.enter.prevent="$store.projectBoard.addComment(card)"></textarea>
+                        <button type="button" class="pb-btn" :disabled="!$store.projectBoard.commentText.trim()"
+                                @click="$store.projectBoard.addComment(card)">comment</button>
+                    </div>
+                </div>
+            </template>
+
+            <div class="pb-modal-actions">
+                <template x-if="card">
+                    <button type="button" class="pb-btn danger" @click="$store.projectBoard.deleteCard(card)">
+                        {% include 'svg/trash.svg' %}<span>delete</span>
+                    </button>
+                </template>
+                <template x-if="card">
+                    <button type="button" class="pb-btn" @click="$store.projectBoard.duplicateCard(card)">duplicate</button>
+                </template>
+
+                <span class="pb-error" x-show="$store.projectBoard.error" x-text="$store.projectBoard.error" x-cloak></span>
+
+                <button type="button" class="pb-btn" @click="$store.projectBoard.closeModal()">cancel</button>
+                <button type="button" class="pb-btn primary"
+                        :disabled="$store.projectBoard.saving || !$store.projectBoard.form.title || !$store.projectBoard.form.title.trim()"
+                        @click="$store.projectBoard.saveCard()"
+                        x-text="$store.projectBoard.saving ? 'saving..' : 'save'"></button>
+            </div>
+        </div>
+    </div>
+</template>

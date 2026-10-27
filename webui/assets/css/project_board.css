@@ -1,0 +1,898 @@
+/* project-board -- Copyright (C) 2026 theunknownmuncher <theunknownmuncher@protonmail.com>
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+/* -- AI-GENERATED CODE (Qwen3.8 Flash Next) :: (2026-10-26) status:reviewed harness:openlumara --
+   Project board styles. Everything is namespaced under .pb- so nothing leaks into the
+   core WebUI, except the two body classes that let the board take the chat panel over. */
+
+/* the board replaces the chat panel: the message history goes away while it is open */
+body.pb-board-open #chat-window > #messages {
+    display: none;
+}
+
+body.pb-board-open.pb-hide-input #chat-window > #input {
+    display: none;
+}
+
+/* ==========================================================================
+   chat header toggle
+   ========================================================================== */
+
+.pb-header-btn {
+    position: relative;
+    gap: 4px;
+}
+
+.pb-header-btn svg {
+    width: 18px;
+    height: 18px;
+}
+
+.pb-header-btn.active {
+    color: var(--text-primary);
+    background: var(--button-hover);
+}
+
+.pb-header-count {
+    font-size: 0.7rem;
+    line-height: 1;
+    padding: 2px 5px;
+    border-radius: var(--radius-full);
+    background: var(--accent-glow);
+    color: var(--text-secondary);
+}
+
+/* ==========================================================================
+   panel frame
+   ========================================================================== */
+
+.pb-board {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    gap: 6px;
+    padding: 8px 10px 4px;
+    background-color: var(--bg-primary);
+    background-image: var(--bg-pattern);
+    background-size: var(--bg-pattern-size);
+    overflow: hidden;
+}
+
+.pb-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.pb-toolbar-group {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.pb-identity {
+    gap: 8px;
+}
+
+.pb-mark svg {
+    display: block;
+    width: 20px;
+    height: 20px;
+    color: var(--accent);
+}
+
+.pb-title {
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+}
+
+.pb-summary {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 5px;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+}
+
+.pb-dot {
+    opacity: 0.6;
+}
+
+.pb-pill {
+    padding: 1px 7px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border-color);
+    font-size: 0.7rem;
+}
+
+.pb-pill.warn {
+    color: var(--important);
+    border-color: var(--important-border);
+    background: var(--important-bg);
+}
+
+.pb-pill.danger {
+    color: var(--error);
+    border-color: var(--error-border);
+    background: var(--error-bg);
+}
+
+.pb-progress {
+    position: relative;
+    height: 14px;
+    border-radius: var(--radius-full);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    overflow: hidden;
+}
+
+.pb-progress-bar {
+    height: 100%;
+    background: var(--button-hover);
+    transition: width 0.25s ease;
+}
+
+.pb-progress-label {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.62rem;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+}
+
+.pb-help {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    padding: 7px 10px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+}
+
+.pb-help b {
+    color: var(--text-primary);
+    font-family: var(--code-font);
+    font-weight: 600;
+}
+
+.pb-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    flex: 1;
+    text-align: center;
+    color: var(--text-secondary);
+}
+
+/* ==========================================================================
+   shared form bits
+   ========================================================================== */
+
+.pb-input {
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    padding: 4px 7px;
+    min-width: 0;
+}
+
+.pb-input:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.pb-search {
+    width: 170px;
+}
+
+.pb-number {
+    width: 62px;
+}
+
+.pb-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.pb-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    font-size: 0.78rem;
+    color: var(--button-text);
+    background: var(--button-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.pb-btn:hover {
+    background: var(--button-hover);
+}
+
+.pb-btn.primary {
+    border-color: var(--accent);
+    font-weight: 600;
+}
+
+.pb-btn.icon {
+    padding: 4px 7px;
+    font-weight: 700;
+}
+
+.pb-btn.icon.active {
+    background: var(--button-hover);
+    border-color: var(--accent);
+}
+
+.pb-btn.icon svg,
+.pb-btn svg {
+    width: 14px;
+    height: 14px;
+}
+
+.pb-btn.danger {
+    color: var(--error);
+}
+
+.pb-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 3px;
+    font-size: 0.8rem;
+    line-height: 1;
+    color: var(--text-muted);
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.pb-icon:hover {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+.pb-icon.danger:hover {
+    color: var(--error);
+}
+
+.pb-icon svg {
+    width: 13px;
+    height: 13px;
+}
+
+/* ==========================================================================
+   columns
+   ========================================================================== */
+
+.pb-columns {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    flex: 1;
+    min-height: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 2px 2px 8px;
+    transition: opacity 0.15s ease;
+}
+
+.pb-columns.dim {
+    opacity: 0.72;
+}
+
+.pb-column {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 300px;
+    width: 300px;
+    max-height: 100%;
+    min-height: 120px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-soft);
+}
+
+.pb-column.over-wip {
+    border-color: var(--error-border);
+}
+
+.pb-column.is-done {
+    background: var(--bg-tertiary);
+}
+
+.pb-column.drop-column {
+    border-color: var(--accent);
+    border-style: dashed;
+}
+
+.pb-new-column {
+    flex: 0 0 190px;
+    width: 190px;
+    min-height: 0;
+    background: transparent;
+    border-style: dashed;
+    box-shadow: none;
+    padding: 8px;
+}
+
+.pb-add-column {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    padding: 10px;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.pb-add-column:hover {
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+}
+
+.pb-add-column svg {
+    width: 14px;
+    height: 14px;
+}
+
+.pb-column-header {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 7px 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.pb-grip {
+    display: inline-flex;
+    color: var(--text-muted);
+    cursor: grab;
+}
+
+.pb-grip svg {
+    width: 12px;
+    height: 16px;
+}
+
+.pb-grip:active {
+    cursor: grabbing;
+}
+
+.pb-column-name {
+    font-size: 0.84rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pb-rename {
+    flex: 1;
+    min-width: 0;
+}
+
+.pb-column-count,
+.pb-column-points,
+.pb-column-wip {
+    flex: none;
+    font-size: 0.68rem;
+    line-height: 1.5;
+    white-space: nowrap;
+    padding: 0 6px;
+    border-radius: var(--radius-full);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+}
+
+.pb-column-wip {
+    font-size: 0.64rem;
+    color: var(--text-muted);
+}
+
+.pb-column-wip.breach {
+    color: var(--error);
+    font-weight: 700;
+}
+
+.pb-column-actions {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    margin-left: auto;
+}
+
+.pb-column-editor {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    padding: 7px 8px;
+    font-size: 0.74rem;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+}
+
+.pb-column-editor .pb-icon {
+    border: 1px solid var(--border-color);
+}
+
+.pb-icon.active {
+    color: var(--text-primary);
+    background: var(--bg-primary);
+}
+
+.pb-editor-actions {
+    display: flex;
+    gap: 5px;
+    margin-left: auto;
+}
+
+/* ==========================================================================
+   cards
+   ========================================================================== */
+
+.pb-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    flex: 1;
+    min-height: 60px;
+    padding: 8px;
+    overflow-y: auto;
+}
+
+.pb-slot {
+    display: flex;
+    flex-direction: column;
+}
+
+.pb-dropline {
+    height: 3px;
+    margin: -3px 0 3px;
+    border-radius: var(--radius-full);
+    background: var(--accent);
+    box-shadow: var(--shadow-glow);
+}
+
+.pb-column-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    min-height: 52px;
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    border: 1px dashed var(--border-color);
+    border-radius: var(--radius-sm);
+}
+
+.pb-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 8px 9px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-left: 3px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    cursor: grab;
+    transition: border-color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+}
+
+.pb-card:hover {
+    border-color: var(--tool-border-hover);
+    box-shadow: var(--shadow-medium);
+}
+
+.pb-card:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.pb-card.dragging {
+    opacity: 0.4;
+}
+
+.pb-card.blocked {
+    border-left-color: var(--error);
+}
+
+.pb-card.overdue {
+    border-left-color: var(--important);
+}
+
+.pb-card-top {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.pb-type {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.pb-type.type-epic { color: var(--tool-completed-color); }
+.pb-type.type-story { color: var(--info); }
+.pb-type.type-bug { color: var(--error); }
+.pb-type.type-chore { color: var(--text-muted); }
+
+.pb-priority {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+}
+
+/* ordinary work stays quiet, so the urgent cards are the ones that stand out */
+.pb-priority.prio-medium,
+.pb-priority.prio-low {
+    border-color: transparent;
+    background: transparent;
+    padding-left: 0;
+    color: var(--text-muted);
+}
+
+.pb-priority.prio-critical {
+    color: var(--error);
+    border-color: var(--error-border);
+    background: var(--error-bg);
+}
+
+.pb-priority.prio-high {
+    color: var(--important);
+    border-color: var(--important-border);
+    background: var(--important-bg);
+}
+
+.pb-card-title {
+    font-size: 0.82rem;
+    line-height: 1.35;
+    word-break: break-word;
+}
+
+.pb-labels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.pb-label {
+    font-size: 0.66rem;
+    padding: 1px 6px;
+    border-radius: var(--radius-full);
+    background: var(--tool-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+}
+
+.pb-card-footer {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+}
+
+.pb-points {
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    background: var(--tool-bg);
+    border: 1px solid var(--border-color);
+    font-family: var(--code-font);
+}
+
+.pb-due.late {
+    color: var(--error);
+    font-weight: 700;
+}
+
+.pb-note-count {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    color: var(--tool-completed-color);
+}
+
+/* the flags sit at the far right of a card, so the meta stays on the left */
+.pb-card-right {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+}
+
+.pb-note-count svg {
+    width: 11px;
+    height: 11px;
+}
+
+.pb-flag {
+    color: var(--error);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.62rem;
+}
+
+.pb-avatar {
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.6rem;
+    font-weight: 700;
+    border-radius: var(--avatar-shape);
+    background: var(--button-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+}
+
+.pb-card-arrows {
+    display: none;
+    gap: 2px;
+    margin-left: 4px;
+}
+
+.pb-card:hover .pb-card-arrows,
+.pb-card:focus-visible .pb-card-arrows {
+    display: inline-flex;
+}
+
+.pb-quickadd {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.pb-quickadd .pb-input {
+    resize: vertical;
+    font-family: inherit;
+}
+
+/* ==========================================================================
+   status bar
+   ========================================================================== */
+
+.pb-statusbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 2px 2px 4px;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.pb-statusbar .pb-error {
+    color: var(--error);
+}
+
+.pb-statusbar .pb-notice {
+    color: var(--info);
+}
+
+.pb-count-hint {
+    margin-left: auto;
+}
+
+/* ==========================================================================
+   card dialog
+   ========================================================================== */
+
+.pb-card-modal {
+    width: min(620px, 90vw);
+}
+
+.pb-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 12px;
+    max-height: calc(90vh - 60px);
+    overflow-y: auto;
+}
+
+.pb-field-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.pb-field-row {
+    display: flex;
+    gap: 8px;
+}
+
+.pb-field-col {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    flex: 1;
+    min-width: 0;
+}
+
+.pb-field-col.pb-narrow {
+    flex: 0 0 96px;
+}
+
+.pb-modal-body .pb-input {
+    width: 100%;
+    font-size: 0.84rem;
+    padding: 6px 8px;
+}
+
+.pb-modal-body textarea.pb-input {
+    resize: vertical;
+    font-family: inherit;
+    line-height: 1.5;
+}
+
+.pb-label-preview {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-height: 18px;
+}
+
+.pb-blocked {
+    margin-top: 6px;
+    font-size: 0.8rem;
+}
+
+.pb-comments {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-color);
+}
+
+.pb-comments-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+.pb-comment {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    padding: 6px 8px;
+    font-size: 0.8rem;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+}
+
+.pb-comment-author {
+    font-weight: 700;
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+}
+
+.pb-comment-text {
+    flex: 1;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.pb-comment .pb-icon {
+    align-self: flex-start;
+}
+
+.pb-comment-add {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+}
+
+.pb-comment-add .pb-input {
+    flex: 1;
+}
+
+.pb-meta {
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+.pb-modal-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-color);
+}
+
+.pb-modal-actions .pb-error {
+    /* the message sits in the middle, so the buttons keep their place */
+    flex: 1;
+    font-size: 0.74rem;
+    color: var(--error);
+}
+
+/* ==========================================================================
+   small screens: one column worth of width at a time, scroll sideways
+   ========================================================================== */
+
+@media (max-width: 768px) {
+    .pb-board {
+        padding: 6px 6px 0;
+    }
+
+    .pb-toolbar-group.pb-filters {
+        width: 100%;
+        order: 3;
+    }
+
+    /* the search field gets a row of its own, otherwise the selects squeeze
+       it down to nothing on a narrow screen */
+    .pb-search {
+        flex: 1 1 100%;
+        width: auto;
+        order: -1;
+    }
+
+    .pb-column,
+    .pb-new-column {
+        flex-basis: 82vw;
+        width: 82vw;
+    }
+
+    .pb-card-arrows {
+        display: inline-flex;
+    }
+
+    .pb-field-row {
+        flex-direction: column;
+    }
+
+    .pb-field-col.pb-narrow {
+        flex: 1;
+    }
+}
