@@ -7,6 +7,10 @@
    card + column editors. Talks to /api/ext/project-board/ and to the module's
    {type: "project_board"} websocket broadcasts. */
 
+/* how often the panel refreshes itself while it is on screen. board changes are pushed
+   over the websocket, so this is the safety net for anything the push missed */
+const PB_REFRESH_SECONDS = 5;
+
 const PROJECT_BOARD = {
     open: localStorage.getItem("pb.open") === "true",
     loading: false,
@@ -20,7 +24,7 @@ const PROJECT_BOARD = {
     cards: [],
     stats: null,
     options: { types: [], priorities: [] },
-    settings: { keep_chat_input: true, refresh_interval: 15 },
+    settings: { keep_chat_input: true },
 
     boards: [],                // every board, with its counts
     activeBoardId: "",
@@ -57,6 +61,8 @@ const PROJECT_BOARD = {
     columnDrag: null,
 
     _timer: null,
+    _timerSeconds: 0,          // the interval the running timer was started with
+    _watchingTab: false,
     _chain: Promise.resolve(),
 
     /* ------------------------------------------------------------------
@@ -72,6 +78,8 @@ const PROJECT_BOARD = {
         this.open = true;
         localStorage.setItem("pb.open", "true");
         this.applyBodyClass();
+
+        // opening the panel always pulls the current board, and the timer starts with it
         await this.refresh(true);
         this.startPolling();
     },
@@ -97,22 +105,40 @@ const PROJECT_BOARD = {
         await this.load();
 
         if (this.open) this.startPolling();
+
+        // coming back to the tab counts as opening the board again, so the board is
+        // never the stale one you left behind
+        if (!this._watchingTab) {
+            this._watchingTab = true;
+
+            document.addEventListener("visibilitychange", () => {
+                if (!this.open || document.visibilityState !== "visible") return;
+
+                this.load();
+                this.startPolling();
+            });
+        }
     },
 
+    /* the board keeps itself current on its own: it loads the moment it is opened and
+       then every PB_REFRESH_SECONDS (five seconds) while it stays on screen. A hidden
+       tab is left alone - browsers throttle its timers anyway, and the visibilitychange
+       handler above catches it up the moment it is looked at again. */
     startPolling() {
         this.stopPolling();
+        if (!this.open) return;
 
-        const seconds = parseInt(this.settings.refresh_interval || 0, 10);
-        if (!this.open || !seconds) return;
-
+        this._timerSeconds = PB_REFRESH_SECONDS;
         this._timer = setInterval(() => {
             if (document.visibilityState === "visible") this.load();
-        }, seconds * 1000);
+        }, PB_REFRESH_SECONDS * 1000);
     },
 
     stopPolling() {
         if (this._timer !== null) clearInterval(this._timer);
+
         this._timer = null;
+        this._timerSeconds = 0;
     },
 
     onBroadcast() {
@@ -167,7 +193,9 @@ const PROJECT_BOARD = {
             this.loaded = true;
             this.refreshedAt = new Date();
 
-            if (this._timer === null) this.startPolling();
+            // a page that loads with the board already open (from localStorage) starts
+            // its timer here, and a tab that is merely open stays on its existing phase
+            if (this.open && this._timer === null) this.startPolling();
         } catch (e) {
             this.error = this.errorText(e);
         } finally {

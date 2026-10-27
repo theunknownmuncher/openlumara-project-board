@@ -41,6 +41,7 @@ intent under test:
 
 import datetime
 import json
+import pathlib
 
 import pytest
 
@@ -528,10 +529,24 @@ async def test_board_route_returns_everything_the_panel_needs(board):
     assert len(payload["cards"]) == 4
     assert payload["stats"]["total"] == 4
     assert payload["options"]["priorities"][0] == "critical"
-    assert set(payload["settings"]) == {"keep_chat_input", "refresh_interval"}
+    assert set(payload["settings"]) == {"keep_chat_input"}
 
     overdue = {card["id"]: card["overdue"] for card in payload["cards"]}
     assert overdue[board.cards[0]["id"]] is True, "the panel gets overdue precomputed"
+
+
+def test_the_panel_asset_keeps_itself_current():
+    """the auto-refresh behaviour lives in the shipped asset rather than in the settings,
+    so it is locked in here: refresh on open, refresh on a five second timer while open,
+    refresh when the tab is looked at again, and no polling once the panel is closed"""
+    script = (pathlib.Path(__file__).resolve().parent.parent
+              / "webui" / "assets" / "js" / "project_board.js").read_text()
+
+    assert "const PB_REFRESH_SECONDS = 5;" in script
+    assert "await this.refresh(true);" in script, "opening the board reloads it"
+    assert "}, PB_REFRESH_SECONDS * 1000);" in script, "and then keeps reloading on that timer"
+    assert '"visibilitychange"' in script, "coming back to the tab reloads it as well"
+    assert "this.stopPolling();" in script, "closing the board stops the timer"
 
 
 async def test_card_routes_roundtrip(board):

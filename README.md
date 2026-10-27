@@ -50,9 +50,12 @@ full-screen board.
   blocked, overdue) and a blocked / overdue pill in the header
 - `n` new card, `shift + N` new board, `/` search, `r` reload, `Esc` back to the chat, and
   `alt + ←/→/↑/↓` to move the focused card between columns or reorder it — no mouse needed
-- the board refreshes itself when your AI changes it or switches to another board (websocket
-  push), when another tab changes it, and after each AI turn. Changes made by hand are picked up
-  by the AI the same way: every tool reloads from disk first
+- it keeps itself current: the board loads the moment you open it, then every 5 seconds
+  while it stays on screen, and again when you come back to the tab. On top of that it reacts
+  to your AI changing or switching boards and to another tab changing it (websocket push), and
+  reloads after each AI turn. Changes made by hand are picked up by the AI the same way: every
+  tool reloads from disk first. There is no setting to tune this: five seconds is what
+  the panel does
 - works on a phone: the switcher and both strips wrap, one column at a time, swipe sideways,
   card dialogs stack vertically
 
@@ -124,7 +127,6 @@ header; on other channels (`/board`, cli, telegram, …) the tools and the comma
 | `default_board_name` | `General` | Name of the board created the first time the module runs, and the name the first project gets when it takes over board-less storage from an older install |
 | `default_columns` | `Backlog, To Do, In Progress, Done` | The column layout every new board starts out with. A column named Done, Closed, Complete or Completed counts as finished work. Changing it later does not touch existing boards |
 | `keep_chat_input` | `true` | Keep the chat input bar visible while the board is open, so you can tell your AI to change the board without leaving it. Off = full-screen board |
-| `refresh_interval` | `15` | Seconds between automatic refreshes while open (`0` disables polling). Board changes are pushed instantly either way |
 | `enable_webui_extension` | `true` | Auto-added by the framework; toggles the board panel and its API routes |
 
 ## Files
@@ -154,6 +156,8 @@ Board data lives in OpenLumara's data folder, as plain JSON you can eyeball or h
 
 ## Notes
 
+- the panel's five second refresh is not a setting anymore (it used to be `refresh_interval`).
+  A leftover `refresh_interval` line in your `config.yml` is simply ignored.
 - **WIP limits warn, they do not block.** Going over a limit is a decision, not an error, so both
   the panel and the tools answer with a warning instead of a refusal.
 - **Deleting a board deletes its cards.** It refuses while the board still has cards unless you

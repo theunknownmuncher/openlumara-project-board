@@ -95,11 +95,6 @@ class ProjectBoard(core.module.Module):
             "default": True,
             "depends": "enable_webui_extension"
         },
-        "refresh_interval": {
-            "description": "Seconds between automatic board refreshes while the board is open, so changes from your AI or from another browser tab show up. 0 disables polling. Board changes are pushed to the WebUI instantly over the websocket either way, so a high value (or 0) is perfectly fine.",
-            "default": 15,
-            "depends": "enable_webui_extension"
-        }
     }
 
     async def on_ready(self):
@@ -1671,7 +1666,6 @@ class ProjectBoard(core.module.Module):
             },
             "settings": {
                 "keep_chat_input": bool(self.config.get("keep_chat_input", True)),
-                "refresh_interval": int(self.config.get("refresh_interval", 15) or 0),
             },
         }
 
