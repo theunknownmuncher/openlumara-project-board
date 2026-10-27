@@ -40,6 +40,7 @@ intent under test:
 """
 
 import datetime
+import json
 
 import pytest
 
@@ -96,7 +97,7 @@ async def test_orphaned_cards_are_adopted_by_the_first_column(board):
     card_id = await add(board, "homeless card")
 
     board.cards[0]["column"] = "01NOTACOLUMN"
-    board.cards.save()
+    board.card_store.save()
     board._reload()
 
     assert board._column_cards(board.columns[0]["id"])[0]["id"] == card_id
@@ -450,7 +451,7 @@ async def test_board_stats_reports_progress_and_workload(board):
 
 
 async def test_board_stats_on_an_empty_board(board):
-    assert (await board.board_stats())["content"] == "the board is empty"
+    assert (await board.board_stats())["content"] == "General is empty"
 
 
 async def test_overdue_only_counts_unfinished_work(board):
@@ -503,7 +504,9 @@ async def test_system_prompt_mentions_the_webui_only_when_it_runs(board):
 # ---------------------------------------------------------------------------
 
 async def test_board_command_renders_the_board_or_a_clear_message(board):
-    assert "no columns" in await board.cmd_board([]) or "no cards" in await board.cmd_board([])
+    empty = await board.cmd_board([])
+    assert "Backlog" in empty, "an empty board still shows the columns it has"
+    assert "nothing on this board yet" in empty
 
     await add(board, "findable card")
 
@@ -604,3 +607,279 @@ async def test_column_routes(board):
     await board._route_column_delete(body={"id": review["id"], "cards": "move"})
     assert "In Review" not in [c["name"] for c in board.columns]
     assert titles(board, "Backlog") == ["in the way"]
+
+
+# ---------------------------------------------------------------------------
+# boards: one per project, one of them active
+# ---------------------------------------------------------------------------
+
+def test_a_fresh_install_starts_with_one_active_board(board):
+    assert len(board.boards) == 1
+    assert board.board is board.boards[0]
+    assert board.board["name"] == "General" and board.board["active"] is True
+    assert [column_entry["name"] for column_entry in board.columns] == \
+        ["Backlog", "To Do", "In Progress", "Done"]
+
+
+def test_the_default_board_name_setting_names_the_first_board(make_board):
+    assert make_board(default_board_name="Kitchen reno").board["name"] == "Kitchen reno"
+
+
+def test_board_less_storage_from_an_older_install_becomes_the_first_board(make_board, isolated_paths):
+    (isolated_paths / "project_board_columns.json").write_text(json.dumps([
+        {"id": "01OLDCOL1", "name": "Up first", "done": False, "wip_limit": 0, "created": "2026-01-01T10:00:00"},
+        {"id": "01OLDCOL2", "name": "Done", "done": True, "wip_limit": 0, "created": "2026-01-01T10:00:01"},
+    ]))
+    (isolated_paths / "project_board_cards.json").write_text(json.dumps([
+        {"id": "OLDARD", "title": "carried over", "column": "01OLDCOL2", "order": 0,
+         "type": "task", "priority": "medium", "points": 3},
+    ]))
+
+    board = make_board()
+
+    assert len(board.boards) == 1 and board.board["name"] == "General"
+    assert [column_entry["name"] for column_entry in board.columns] == ["Up first", "Done"], \
+        "the migrated board keeps its own layout instead of being handed the default one"
+    assert board.cards[0]["title"] == "carried over"
+    assert board.cards[0]["board"] == board.board["id"]
+    assert board._stats()["done"] == 1 and board._stats()["progress"] == 100
+
+
+async def test_new_boards_are_their_own_room(board):
+    await add(board, "on general")
+
+    await board.create_board("Website redesign")
+    assert board.board["name"] == "Website redesign", "creating a board switches to it"
+    assert [c["title"] for c in board.cards] == []
+
+    await add(board, "on the other one")
+    assert titles(board, "Backlog") == ["on the other one"]
+
+    await board.activate_board("General")
+    assert titles(board, "Backlog") == ["on general"]
+
+
+async def test_columns_and_wip_limits_belong_to_a_board(board):
+    await board.add_column("In Review", after="In Progress", wip_limit=2)
+    await board.create_board("Second project")
+
+    assert [column_entry["name"] for column_entry in board.columns] == ["Backlog", "To Do", "In Progress", "Done"]
+
+    # the same column name again, on another board, which is perfectly fine
+    await board.add_column("In Review", wip_limit=5)
+    assert column(board, "In Review")["wip_limit"] == 5
+
+    await board.activate_board("Second project")
+    assert column(board, "In Review")["wip_limit"] == 5
+
+    await board.activate_board("General")
+    assert column(board, "In Review")["wip_limit"] == 2
+    assert [column_entry["name"] for column_entry in board.columns] == \
+        ["Backlog", "To Do", "In Progress", "In Review", "Done"]
+
+
+async def test_create_board_can_stay_quiet_or_copy_another_layout(board):
+    await board.add_column("In Review", after="In Progress")
+
+    await board.create_board("Not yet", activate=False)
+    assert board.board["name"] == "General"
+
+    await board.create_board("Same stages", like="General")
+    assert [column_entry["name"] for column_entry in board.columns] == \
+        ["Backlog", "To Do", "In Progress", "In Review", "Done"]
+
+    await board.create_board("Minimal", columns=["Now", "Later"])
+    assert [column_entry["name"] for column_entry in board.columns] == ["Now", "Later"]
+
+
+async def test_board_names_are_yours_to_keep(board):
+    await board.create_board("Website redesign")
+
+    duplicate = await board.create_board("website Redesign")
+    assert duplicate["status"] == "error" and "already a board" in duplicate["content"]
+
+    renamed = await board.edit_board("Website redesign", name="Marketing site",
+                                     description="the thing with the funnel")
+    assert renamed["status"] == "success"
+    assert board.board["name"] == "Marketing site"
+    assert board.board["description"] == "the thing with the funnel"
+
+    clash = await board.edit_board("Marketing site", name="General")
+    assert clash["status"] == "error"
+
+    assert (await board.edit_board("General"))["status"] == "error", "nothing to change"
+
+
+async def test_activating_a_board_accepts_id_name_or_a_piece_of_it(board):
+    await board.create_board("Website redesign")
+    target = board.board["id"]
+
+    await board.activate_board("General")
+    for reference in (target, "Website redesign", "redesign"):
+        await board.activate_board("General")
+        result = await board.activate_board(reference)
+        assert result["status"] == "success", result["content"]
+        assert board.board["id"] == target
+
+    already = await board.activate_board("Website redesign")
+    assert "already the active board" in already["content"]
+
+    assert (await board.activate_board("nope"))["status"] == "error"
+    assert (await board.activate_board("nope"))["content"].endswith("use list_boards to list them)")
+
+
+async def test_two_boards_with_the_same_word_switch_without_guessing(board):
+    await board.create_board("Website redesign")
+    await board.activate_board("General")
+    await board.create_board("Website migration")
+
+    ambiguous = await board.activate_board("Website")
+    assert ambiguous["status"] == "error" and "several boards match" in ambiguous["content"]
+
+    assert (await board.activate_board("Website redesign"))["status"] == "success"
+
+
+async def test_you_can_look_at_another_board_without_moving_the_pen(board):
+    await add(board, "on general")
+    await board.create_board("Other project")
+    await add(board, "on the other one")
+
+    await board.activate_board("General")
+
+    listing = await board.read_board(board="Other project")
+    assert "on the other one" in listing["content"]
+    assert "looked at, not active" in listing["content"]
+
+    stats = await board.board_stats(board="Other project")
+    assert stats["content"].startswith("Other project:")
+
+    # writing after a look still writes to the board you are actually on
+    await board.add_card("still on general")
+    assert titles(board, "Backlog") == ["on general", "still on general"]
+
+    assert (await board.read_board(board="nope"))["status"] == "error"
+
+
+async def test_list_boards_shows_the_boards_with_their_counts(board):
+    await add(board, "one", points=3)
+    await add(board, "two", column="Done")
+    await board.create_board("Second")
+    await add(board, "three", column="In Progress", points=5)
+    await board.activate_board("General")
+
+    listing = (await board.list_boards())["content"]
+    assert "[ACTIVE]" in listing
+    assert "General - 2 cards (1 done), 3 points open, 4 columns [ACTIVE]" in listing
+    assert "Second - 1 cards (0 done), 5 points open, 4 columns" in listing
+    assert listing.count("\n  ") == 2
+
+
+async def test_deleting_a_board_takes_its_columns_and_cards_with_it(board):
+    await add(board, "keep me")
+    await board.create_board("Doomed")
+    doomed_id = board.board["id"]
+    await add(board, "bye")
+
+    refused = await board.delete_board("Doomed")
+    assert refused["status"] == "error" and "cards would be lost" in refused["content"]
+    assert len(board.boards) == 2
+
+    deleted = await board.delete_board(doomed_id, force=True)
+    assert deleted["status"] == "success"
+
+    assert [b["name"] for b in board.boards] == ["General"]
+    assert board.board["name"] == "General" and board.board["active"] is True
+    assert titles(board, "Backlog") == ["keep me"]
+    assert not [column_entry for column_entry in board.column_store if column_entry["board"] == doomed_id]
+    assert not [card for card in board.card_store if card["board"] == doomed_id]
+
+
+async def test_the_only_board_left_cannot_be_deleted(board):
+    result = await board.delete_board("General", force=True)
+    assert result["status"] == "error" and "only board" in result["content"]
+
+
+async def test_items_pointing_at_a_board_that_is_gone_get_adopted(board):
+    await add(board, "orphan")
+
+    entry = next(card for card in board.card_store if card["id"] == board.cards[-1]["id"])
+    entry["board"] = "0GONE"
+    board.card_store.save()
+
+    board._reload()
+
+    assert board.cards[-1]["title"] == "orphan"
+    assert board.cards[-1]["board"] == board.boards[0]["id"]
+
+
+async def test_the_prompt_names_the_active_board_and_points_at_the_others(board):
+    await add(board, "on general")
+    await board.create_board("Website redesign")
+    await add(board, "on the other one")
+    await board.activate_board("General")
+
+    prompt = await board.on_system_prompt()
+
+    assert "'General' project board" in prompt
+    assert "Website redesign" in prompt and "activate_board" in prompt
+    assert "on general" in prompt
+    assert "on the other one" not in prompt, "another board's cards never leak into the prompt"
+
+
+async def test_the_board_command_can_list_and_switch_boards(board):
+    await board.create_board("Website redesign")
+    await board.activate_board("General")
+
+    assert "Website redesign" in (await board.cmd_board(["list"]))
+    assert "General is already the active board" in (await board.cmd_board(["switch", "General"]))
+
+    switched = await board.cmd_board(["switch", "Website", "redesign"])
+    assert "active board is now Website redesign" in switched
+    assert board.board["name"] == "Website redesign"
+
+    assert "Website redesign" in (await board.cmd_boards([]))
+    assert "Backlog" in (await board.cmd_board([]))
+
+
+async def test_the_ui_payload_offers_the_board_switcher(board):
+    await add(board, "on general")
+    await board.create_board("Second")
+    await add(board, "one", column="In Progress")
+    await board.activate_board("General")
+
+    payload = board._ui_board()
+
+    assert payload["active"]["name"] == "General"
+    assert [entry["name"] for entry in payload["boards"]] == ["General", "Second"]
+    assert payload["boards"][0]["active"] is True and payload["boards"][0]["cards"] == 1
+    assert payload["boards"][1]["active"] is False and payload["boards"][1]["cards"] == 1
+    assert payload["boards"][1]["points"] == 0
+    assert [card["title"] for card in payload["cards"]] == ["on general"], "only the active board's cards"
+
+
+async def test_the_board_routes_roundtrip(board):
+    created = await board._route_board_create(body={"name": "Second", "columns": ["Now", "Later"]})
+    assert created["status"] == "success"
+    assert [column_entry["name"] for column_entry in board.columns] == ["Now", "Later"]
+
+    second = board.board["id"]
+
+    await board.activate_board("General")
+    activated = await board._route_board_activate(body={"id": second})
+    assert activated["status"] == "success" and board.board["id"] == second
+
+    updated = await board._route_board_update(body={"id": second, "description": "temporary"})
+    assert updated["status"] == "success"
+    assert next(b for b in board.boards if b["id"] == second)["description"] == "temporary"
+
+    await board._route_card_create(body={"title": "on the second board", "column": "Now"})
+
+    refused = await board._route_board_delete(body={"id": second})
+    assert refused["status"] == "error", "a board with cards needs force"
+
+    # the last board standing is protected, too
+    await board._route_board_delete(body={"id": second, "force": True})
+    assert (await board._route_board_delete(body={"id": board.boards[0]["id"], "force": True}))["status"] == "error"
+
+    assert (await board._route_board_activate(body={"id": "NOPE"}))["status"] == "error"
+    assert (await board._route_board_create(body={}))["status"] == "error"

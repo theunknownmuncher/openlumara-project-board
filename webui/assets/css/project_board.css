@@ -4,6 +4,68 @@
    Project board styles. Everything is namespaced under .pb- so nothing leaks into the
    core WebUI, except the two body classes that let the board take the chat panel over. */
 
+/* ------------------------------------------------------------------
+   board switcher: one board per project, the panel shows one at a time
+   ------------------------------------------------------------------ */
+
+.pb-board-select {
+    max-width: 220px;
+    min-width: 96px;
+    font-weight: 700;
+    font-size: 0.85rem;
+    padding: 3px 6px;
+    cursor: pointer;
+    text-overflow: ellipsis;
+}
+
+.pb-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 10px;
+    font-size: 0.78rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+}
+
+.pb-strip-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+}
+
+.pb-strip-wide {
+    flex: 1;
+    min-width: 160px;
+}
+
+.pb-strip-meta {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.pb-btn.danger {
+    color: var(--error);
+    border-color: var(--error-border, var(--border-color));
+}
+
+.pb-btn.danger:hover {
+    background: var(--error-bg, var(--button-hover));
+}
+
+.pb-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.pb-btn:disabled:hover {
+    background: var(--button-bg);
+}
+
 /* the board replaces the chat panel: the message history goes away while it is open */
 body.pb-board-open #chat-window > #messages {
     display: none;
@@ -876,6 +938,22 @@ body.pb-board-open.pb-hide-input #chat-window > #input {
         flex: 1 1 100%;
         width: auto;
         order: -1;
+    }
+
+    .pb-board-select {
+        max-width: 44vw;
+    }
+
+    .pb-strip {
+        padding: 6px 8px;
+    }
+
+    .pb-strip .pb-input {
+        flex: 1 1 100%;
+    }
+
+    .pb-strip-meta {
+        width: 100%;
     }
 
     .pb-column,

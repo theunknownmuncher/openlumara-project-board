@@ -38,6 +38,10 @@ ID_LENGTH = 6
 # columns whose cards count towards "done" in the progress / stats math
 DONE_COLUMN_NAMES = ("done", "closed", "complete", "completed")
 
+# name of the board a fresh install starts with, and what the first board is called when
+# storage from before boards existed gets migrated
+DEFAULT_BOARD_NAME = "General"
+
 
 def _now():
     return datetime.datetime.now().isoformat(timespec="seconds")
@@ -64,7 +68,7 @@ def _is_overdue(card):
 
 
 class ProjectBoard(core.module.Module):
-    """Gives you a kanban / scrum project board: you drag the cards around in the WebUI, your AI runs the board with tools."""
+    """Gives you kanban / scrum project boards, one per project: you drag the cards around in the WebUI, your AI runs the same board with tools."""
 
     category = "life"
 
@@ -79,8 +83,12 @@ class ProjectBoard(core.module.Module):
             "depends": "insert_system_prompt"
         },
         "default_columns": {
-            "description": "Columns to create on a fresh board. A column named Done, Closed, Complete or Completed is treated as a done column, which is what progress percentages are counted from. Changing this later does not touch an existing board - rename or delete columns in the WebUI instead, or ask your AI to.",
+            "description": "Columns every new board starts out with. A column named Done, Closed, Complete or Completed is treated as a done column, which is what progress percentages are counted from. Changing this later does not touch existing boards - rename or delete columns in the WebUI instead, or ask your AI to.",
             "default": ["Backlog", "To Do", "In Progress", "Done"]
+        },
+        "default_board_name": {
+            "description": "Name of the board your AI creates the first time the module runs, and the name the first project gets when it takes over board-less storage from an older install. Every board after that is one you or your AI name yourself.",
+            "default": DEFAULT_BOARD_NAME
         },
         "keep_chat_input": {
             "description": "Keep the chat input bar at the bottom while the board is open, so you can tell your AI to change the board without leaving it. Turn this off for a full-screen board.",
@@ -96,45 +104,256 @@ class ProjectBoard(core.module.Module):
 
     async def on_ready(self):
         self._broadcast_tasks = set()
-        self.cards = core.storage.StorageList("project_board_cards", "json")
-        self.columns = core.storage.StorageList("project_board_columns", "json")
 
-        # a fresh board gets its columns from the settings
-        if not self.columns:
-            names = self.config.get("default_columns") or []
-            for name in names:
-                name = str(name).strip()
-                if not name:
-                    continue
-                self.columns.append(self._new_column(name, done=_slug(name) in DONE_COLUMN_NAMES))
-            self.columns.save()
+        # one file per concern, each of them holding the items of *every* board: what
+        # makes a card or a column belong to a board is its "board" field. one file per
+        # kind keeps the data folder small and the json still easy to eyeball by hand.
+        self.boards = core.storage.StorageList("project_board_boards", "json")
+        self.card_store = core.storage.StorageList("project_board_cards", "json")
+        self.column_store = core.storage.StorageList("project_board_columns", "json")
+
+        self.board = None
+
+        self._migrate()
+
+        # a fresh install gets a single board, with its columns from the settings
+        if not len(self.boards):
+            self._new_board(self._default_board_name())
+
+        self._select_active()
+
+    # ------------------------------------------------------------------
+    # boards
+    # ------------------------------------------------------------------
+
+    @property
+    def cards(self):
+        """the cards of the active board. reads go through here so a tool can never
+        reach into another project's cards by accident"""
+        return self._cards_of(self.board)
+
+    @property
+    def columns(self):
+        """the columns of the active board, top to bottom"""
+        return self._columns_of(self.board)
+
+    def _cards_of(self, board):
+        if not board:
+            return []
+        return [card for card in self.card_store if card.get("board") == board["id"]]
+
+    def _columns_of(self, board):
+        if not board:
+            return []
+
+        owned = [column for column in self.column_store if column.get("board") == board["id"]]
+        return sorted(owned, key=lambda column: (int(column.get("order") or 0), str(column.get("created") or "")))
+
+    def _default_board_name(self):
+        return str(self.config.get("default_board_name") or DEFAULT_BOARD_NAME).strip() or DEFAULT_BOARD_NAME
+
+    def _new_board(self, name, description="", columns=None, activate=True):
+        """creates a board with its column layout and returns it. `columns` defaults to
+        the layout from the settings, which is what a fresh project starts out with"""
+        names = columns if columns is not None else (self.config.get("default_columns") or [])
+
+        board = {
+            "id": self._new_id(self.boards),
+            "name": str(name).strip(),
+            "description": str(description or "").strip(),
+            "active": False,
+            "created": _now(),
+            "updated": _now(),
+        }
+        self.boards.append(board)
+
+        position = 0
+        for column_name in names:
+            column_name = str(column_name).strip()
+            if not column_name:
+                continue
+            if any(_slug(existing["name"]) == _slug(column_name) for existing in self._columns_of(board)):
+                continue
+
+            self.column_store.append(self._new_column(column_name, board["id"], position,
+                                                      done=_slug(column_name) in DONE_COLUMN_NAMES))
+            position += 1
+
+        # the first board is always the active one, after that it is your call
+        if activate or not any(other.get("active") for other in self.boards):
+            self.set_active(board)
+
+        return board
+
+    def set_active(self, board):
+        """marks exactly one board as active. no storage write and no broadcast here, so
+        tools and routes stay in charge of when that happens"""
+        for other in self.boards:
+            other["active"] = other is board
+
+        self.board = board
+
+    def _board_ref(self, ref):
+        """board reference -> (board, problem), resolved like every other reference"""
+        index, problem = self._lookup(self.boards, ref, "name")
+        if index < 0:
+            return None, problem
+
+        return self.boards[index], ""
+
+    def _boards_overview(self):
+        """live counts per board, for the WebUI switcher and for list_boards"""
+        overview = []
+
+        for board in self.boards:
+            cards = self._cards_of(board)
+            columns = self._columns_of(board)
+            done_ids = {column["id"] for column in columns if column.get("done")}
+
+            overview.append({
+                "id": board["id"],
+                "name": board["name"],
+                "description": board.get("description", ""),
+                "active": bool(board.get("active")),
+                "cards": len(cards),
+                "done": len([card for card in cards if card.get("column") in done_ids]),
+                "columns": len(columns),
+                "points": sum(int(card.get("points") or 0) for card in cards
+                              if card.get("column") not in done_ids),
+            })
+
+        return overview
+
+    def _board_summary(self, board):
+        """one line of numbers about a board, for the replies after switching or creating"""
+        cards = self._cards_of(board)
+        columns = self._columns_of(board)
+        done_ids = {column["id"] for column in columns if column.get("done")}
+
+        done = len([card for card in cards if card.get("column") in done_ids])
+        blocked = len([card for card in cards if card.get("blocked") and card.get("column") not in done_ids])
+        overdue = len([card for card in cards if card.get("column") not in done_ids and _is_overdue(card)])
+
+        return (f"{len(cards)} cards ({done} done, {blocked} blocked, {overdue} overdue), columns: "
+                + (" -> ".join(column["name"] for column in columns) or "none yet"))
 
     # ------------------------------------------------------------------
     # storage helpers
     # ------------------------------------------------------------------
 
+    def _save(self):
+        self.card_store.save()
+        self.column_store.save()
+        self.boards.save()
+
+    def _drop_card(self, index):
+        """removes the card at an index of the active board's listing from storage"""
+        entry = self.cards[index]
+        self._drop_cards([entry])
+        return entry
+
+    def _drop_cards(self, entries):
+        doomed = {id(entry) for entry in entries}
+        self.card_store[:] = [card for card in self.card_store if id(card) not in doomed]
+
     def _reload(self):
         """pick up edits made by other processes / a previous session"""
-        self.cards.load()
-        self.columns.load()
-        self._adopt_orphans()
+        self.boards.load()
+        self.card_store.load()
+        self.column_store.load()
+
+        if not len(self.boards):
+            self._new_board(self._default_board_name())
+
+        changed = self._heal()
+        self._select_active()
+
+        if changed:
+            self._save()
+
+    def _migrate(self):
+        """storage from before boards existed has no 'board' field at all: that pile of
+        columns and cards becomes the first board instead of silently disappearing"""
+        stray_columns = [column for column in self.column_store if not column.get("board")]
+        stray_cards = [card for card in self.card_store if not card.get("board")]
+
+        if not stray_columns and not stray_cards:
+            return None
+
+        # the migrated board keeps its own layout, so it must not be handed the default one
+        board = self._new_board(self._default_board_name(), columns=[], activate=not len(self.boards))
+
+        # the old file order was the layout, and columns had no order field of their own
+        by_age = sorted(stray_columns, key=lambda entry: str(entry.get("created") or ""))
+        for position, column in enumerate(by_age):
+            column["board"] = board["id"]
+            column["order"] = position
+
+        for card in stray_cards:
+            card["board"] = board["id"]
+
+        self.log(self.name, f"moved {len(stray_cards)} card(s) and {len(stray_columns)} column(s) "
+                            f"onto the new '{board['name']}' board")
+        return board
+
+    def _heal(self):
+        """adopt items that point at a board or a column that is gone. returns whether
+        anything was repaired, so the caller knows it has to write"""
+        if not len(self.boards):
+            return False
+
+        changed = False
+        known = {board["id"] for board in self.boards}
+
+        for entry in list(self.column_store) + list(self.card_store):
+            if entry.get("board") not in known:
+                entry["board"] = self.boards[0]["id"]
+                changed = True
+
+        if changed:
+            self.log(self.name, "adopted item(s) whose board no longer exists")
+
+        # _adopt_orphans works on the active board, so take each board in turn
+        restore = self.board
+        for board in self.boards:
+            self.board = board
+            if self._adopt_orphans():
+                changed = True
+        self.board = restore
+
+        return changed
 
     def _adopt_orphans(self):
-        """heal cards pointing at a column that no longer exists (hand-edited storage, etc)"""
+        """heal cards on the active board pointing at a column that no longer exists"""
         orphans = self._orphan_cards()
         if not orphans or not len(self.columns):
-            return
+            return False
 
         target = self.columns[0]
         for card in orphans:
             self._place(card, target["id"])
 
-        self.cards.save()
-        self.log(self.name, f"moved {len(orphans)} orphan card(s) to {target['name']}")
+        name = self.board["name"] if self.board else "?"
+        self.log(self.name, f"moved {len(orphans)} orphan card(s) on '{name}' to {target['name']}")
+        return True
 
-    def _new_column(self, name, done=False, wip_limit=0):
+    def _select_active(self):
+        """self.board is the board the tools and the panel work on. a board list with no
+        active flag (hand-edited storage) falls back to the first board"""
+        active = next((board for board in self.boards if board.get("active")), None)
+        if active is None and len(self.boards):
+            active = self.boards[0]
+
+        if active is not None and not active.get("active"):
+            self.set_active(active)
+        else:
+            self.board = active
+
+    def _new_column(self, name, board_id, order=0, done=False, wip_limit=0):
         return {
             "id": str(ulid.ULID()),
+            "board": board_id,
+            "order": int(order or 0),
             "name": str(name).strip(),
             "done": bool(done),
             "wip_limit": max(0, int(wip_limit or 0)),
@@ -153,11 +372,12 @@ class ProjectBoard(core.module.Module):
     def _new_card(self, title, column_id, description="", card_type="task", priority="medium",
                   assignee="", labels=None, points=0, due="", order=0):
         return {
-            "id": self._new_id(self.cards),
+            "id": self._new_id(self.card_store),
             "title": str(title).strip(),
             "description": str(description or ""),
             "type": str(card_type or "task").strip().lower(),
             "priority": str(priority or "medium").strip().lower(),
+            "board": self.board["id"] if self.board else None,
             "column": column_id,
             "order": int(order or 0),
             "assignee": str(assignee or "").strip(),
@@ -225,7 +445,9 @@ class ProjectBoard(core.module.Module):
     def _not_found(self, kind, ref, problem):
         if problem == "ambiguous":
             return f"several {kind}s match '{ref}', please use the exact id instead"
-        return f"no {kind} matching '{ref}' was found (use read_board to list them)"
+
+        listing = "list_boards" if kind == "board" else "read_board"
+        return f"no {kind} matching '{ref}' was found (use {listing} to list them)"
 
     def _column_cards(self, column_id):
         """cards of a column, in board order"""
@@ -261,6 +483,12 @@ class ProjectBoard(core.module.Module):
 
         card["updated"] = _now()
         return position
+
+    def _set_column_layout(self, ordered):
+        """writes a top-to-bottom column order back onto the column items. columns keep
+        their own order field so several boards can share one storage file"""
+        for position, entry in enumerate(ordered):
+            entry["order"] = position
 
     def _default_column_index(self):
         """where new cards land when nobody says otherwise: the first column that isn't done"""
@@ -343,7 +571,7 @@ class ProjectBoard(core.module.Module):
                 listed.append(line)
 
         stats = self._stats()
-        intro = "You manage a project board with your project-board tools."
+        intro = f"You manage the '{self.board['name']}' project board with your project-board tools."
         if "webui" in self.manager.channels:
             intro += " The user can see the board in the webui, so your changes show up for them right away."
 
@@ -353,6 +581,12 @@ class ProjectBoard(core.module.Module):
             f"{points_open} points still open. Columns: "
             + " -> ".join(column["name"] for column in self.columns) + "."
         )
+
+        if len(self.boards) > 1:
+            others = [f"{board['id']} {board['name']}" for board in self.boards if board is not self.board]
+            header += (" This is one board of several - the others are " + ", ".join(others) +
+                       ". Cards never move between boards on their own; switch with activate_board "
+                       "when the user means another project.")
 
         if not len(self.cards):
             return header + "\nThe board is empty."
@@ -506,6 +740,192 @@ class ProjectBoard(core.module.Module):
             self.log(self.name, f"could not broadcast board update: {core.detail_error(e)}")
 
     # ------------------------------------------------------------------
+    # tools: boards (one board per project)
+    # ------------------------------------------------------------------
+
+    @core.module.tool
+    async def list_boards(self):
+        """Lists every project board with its card counts and marks the active one. The
+        active board is what the other tools and the panel the user sees work on.
+
+        Returns:
+            one line per board: id, name, cards (done), open points, column count
+        """
+        self._reload()
+
+        if not len(self.boards):
+            return self.result("no project boards were found", success=False)
+
+        lines = ["project boards:"]
+        for entry in self._boards_overview():
+            line = (f"  [{entry['id']}] {entry['name']} - {entry['cards']} cards "
+                    f"({entry['done']} done), {entry['points']} points open, "
+                    f"{entry['columns']} columns" + (" [ACTIVE]" if entry["active"] else ""))
+            lines.append(line)
+
+            if entry["description"]:
+                lines.append(f"        {entry['description']}")
+
+        lines.append("")
+        lines.append("switch with activate_board, the user can also switch it in the board's header.")
+
+        return self.result("\n".join(lines))
+
+    @core.module.tool
+    async def create_board(self, name: str, description: str = None, columns: list = None,
+                           like: str = None, activate: bool = True):
+        """Creates another project board, so a second project gets its own cards and its own
+        columns. Nothing is shared between boards except the person looking at them.
+
+        Args:
+            name: what the project is called, e.g. "Website redesign"
+            description: what this board is for, so you still know later
+            columns: column names for the new board. Defaults to the layout from the settings
+            like: name or id of an existing board whose column layout to copy instead, which is
+                handy when every project runs through the same stages
+            activate: switch to the new board right away (default true). Set false to keep
+                working on the current board
+        """
+        self._reload()
+
+        name = str(name or "").strip()
+        if not name:
+            return self.result("a board needs a name", success=False)
+
+        if any(_slug(existing["name"]) == _slug(name) for existing in self.boards):
+            return self.result(f"there is already a board called {name}", success=False)
+
+        # an explicit layout wins over copying one
+        layout = [str(entry) for entry in columns] if columns else None
+
+        if layout is None and like:
+            source, problem = self._board_ref(like)
+            if source is None:
+                return self.result(self._not_found("board", like, problem), success=False)
+
+            layout = [column["name"] for column in self._columns_of(source)] or None
+
+        previous = self.board
+        board = self._new_board(name, description or "", columns=layout, activate=bool(activate))
+
+        self._save()
+        self.broadcast_board("board_created")
+
+        result = f"created board {board['id']} ({board['name']}) with {len(self._columns_of(board))} columns"
+        if board.get("active"):
+            return self.result(f"{result} - it is the active board now: " + self._board_summary(board))
+
+        return self.result(f"{result} - still on {previous['name']}, "
+                           f"switch later with activate_board('{board['id']}')")
+
+    @core.module.tool
+    async def edit_board(self, board: str, name: str = None, description: str = None):
+        """Renames a project board or changes what its description says about it.
+
+        Args:
+            board: the board's id, or its name (an unambiguous part of the name works too)
+            name: new name for the board
+            description: what the board is for, empty string clears it
+        """
+        self._reload()
+
+        entry, problem = self._board_ref(board)
+        if entry is None:
+            return self.result(self._not_found("board", board, problem), success=False)
+
+        changed = []
+
+        if name is not None and str(name).strip():
+            new_name = str(name).strip()
+            if any(other["id"] != entry["id"] and _slug(other["name"]) == _slug(new_name)
+                   for other in self.boards):
+                return self.result(f"there is already a board called {new_name}", success=False)
+
+            entry["name"] = new_name
+            changed.append(f"name -> {new_name}")
+
+        if description is not None:
+            entry["description"] = str(description).strip()
+            changed.append("description")
+
+        if not changed:
+            return self.result("nothing to change", success=False)
+
+        entry["updated"] = _now()
+        self._save()
+        self.broadcast_board("board_updated")
+
+        return self.result(f"updated board {entry['name']}: " + ", ".join(changed))
+
+    @core.module.tool
+    async def activate_board(self, board: str):
+        """Switches to another project board. From then on the tools, the panel the user is
+        looking at and every card you add are on that board.
+
+        Args:
+            board: the board's id, or its name (an unambiguous part of the name works too)
+        """
+        self._reload()
+
+        entry, problem = self._board_ref(board)
+        if entry is None:
+            return self.result(self._not_found("board", board, problem), success=False)
+
+        if entry is self.board:
+            return self.result(f"{entry['name']} is already the active board: {self._board_summary(entry)}")
+
+        self.set_active(entry)
+        self._save()
+        self.broadcast_board("board_switched")
+
+        return self.result(f"active board is now {entry['name']}: {self._board_summary(entry)}")
+
+    @core.module.tool
+    async def delete_board(self, board: str, force: bool = False):
+        """Deletes a project board together with its columns and every card on it.
+        DANGEROUS: the cards are gone, not moved somewhere else.
+
+        Args:
+            board: the board's id, or its name (an unambiguous part of the name works too)
+            force: set to true when the board still has cards and the user meant it
+        """
+        self._reload()
+
+        entry, problem = self._board_ref(board)
+        if entry is None:
+            return self.result(self._not_found("board", board, problem), success=False)
+
+        if len(self.boards) <= 1:
+            return self.result("that is the only board there is, so it cannot be deleted - clear "
+                               "its columns instead or create another board first", success=False)
+
+        cards = self._cards_of(entry)
+        columns = self._columns_of(entry)
+
+        if cards and not force:
+            return self.result(f"refusing to delete {entry['name']}: {len(cards)} cards would be lost. "
+                               f"Pass force=True once the user really wants the project gone.", success=False)
+
+        was_active = bool(entry.get("active"))
+
+        self._drop_cards(cards)
+        for column in columns:
+            self.column_store.remove(column)
+        self.boards.remove(entry)
+
+        if was_active:
+            self._select_active()
+        elif self.board is None:
+            self._select_active()
+
+        self._save()
+        self.broadcast_board("board_deleted")
+
+        return self.result(f"deleted board {entry['name']} with {len(cards)} card(s) and "
+                           f"{len(columns)} column(s). active board is now {self.board['name']}: "
+                           f"{self._board_summary(self.board)}")
+
+    # ------------------------------------------------------------------
     # tools: reading
     # ------------------------------------------------------------------
 
@@ -513,7 +933,7 @@ class ProjectBoard(core.module.Module):
     async def read_board(self, column: str = None, query: str = None, assignee: str = None,
                          priority: str = None, label: str = None, card_type: str = None,
                          include_done: bool = True, include_descriptions: bool = False,
-                         max_cards: int = 80):
+                         max_cards: int = 80, board: str = None):
         """Reads the project board as a compact listing, one line per card, with the short
         card id first (that id is what the other tools take). Call this before moving or
         editing cards so you work with real ids and titles.
@@ -528,11 +948,19 @@ class ProjectBoard(core.module.Module):
             include_done: set to false to leave out columns marked as done
             include_descriptions: include each card's description under its line
             max_cards: stop after this many cards across the whole board
+            board: read another board by name or id without switching to it. Defaults to the
+                active board, and writing tools never touch a board you merely looked at
         """
         self._reload()
 
+        if board:
+            other, problem = self._board_ref(board)
+            if other is None:
+                return self.result(self._not_found("board", board, problem), success=False)
+            self.board = other
+
         if not len(self.columns):
-            return self.result("the board has no columns yet", success=False)
+            return self.result(f"{self.board['name']} has no columns yet", success=False)
 
         only_column = None
         if column:
@@ -543,6 +971,7 @@ class ProjectBoard(core.module.Module):
 
         filters = dict(query=query or "", assignee=assignee or "", priority=priority or "",
                        label=label or "", card_type=card_type or "")
+        filtering = any(filters.values())
 
         output = []
         shown = 0
@@ -579,11 +1008,17 @@ class ProjectBoard(core.module.Module):
 
             output.append("\n".join(lines))
 
-        if shown == 0 and hidden == 0:
+        # an empty board is not "no matches": show its columns so the listing still says
+        # something useful about the project
+        if not shown and not hidden and filtering:
             return self.result("no cards match those filters", success=False)
 
+        if not shown and not hidden:
+            output.append("nothing on this board yet - add a card, or break a project down into stories")
+
         stats = self._stats()
-        footer = f"\nboard: {stats['total']} cards, {stats['done']} done ({stats['progress']}%), " \
+        footer = f"\nboard: {self.board['name']}" + ("" if self.board.get("active") else " (looked at, not active)") + \
+                 f" - {stats['total']} cards, {stats['done']} done ({stats['progress']}%), " \
                  f"{stats['blocked']} blocked, {stats['overdue']} overdue."
 
         if hidden:
@@ -592,17 +1027,27 @@ class ProjectBoard(core.module.Module):
         return self.result("\n\n".join(output) + footer)
 
     @core.module.tool
-    async def board_stats(self):
+    async def board_stats(self, board: str = None):
         """Summarizes the project board: progress, per-column counts, work in progress limit
-        breaches, blocked and overdue cards, and a per-person workload. Great for standups."""
+        breaches, blocked and overdue cards, and a per-person workload. Great for standups.
+
+        Args:
+            board: summarize another board by name or id without switching to it
+        """
         self._reload()
+
+        if board:
+            other, problem = self._board_ref(board)
+            if other is None:
+                return self.result(self._not_found("board", board, problem), success=False)
+            self.board = other
 
         stats = self._stats()
         if not stats["total"]:
-            return self.result("the board is empty")
+            return self.result(f"{self.board['name']} is empty")
 
         lines = [
-            f"{stats['total']} cards: {stats['done']} done ({stats['progress']}%), "
+            f"{self.board['name']}: {stats['total']} cards, {stats['done']} done ({stats['progress']}%), "
             f"{stats['total'] - stats['done']} open",
             f"points: {stats['points_done']}/{stats['points_total']} done",
             f"watch out: {stats['blocked']} blocked, {stats['overdue']} overdue, {stats['unassigned']} unassigned",
@@ -708,8 +1153,8 @@ class ProjectBoard(core.module.Module):
         card["blocked"] = bool(blocked)
 
         self._place(card, target["id"], index=0 if to_top else None)
-        self.cards.append(card)
-        self.cards.save()
+        self.card_store.append(card)
+        self._save()
         self.broadcast_board("card_added")
 
         result = f"added card {card['id']} to {target['name']}: {card['title']}"
@@ -788,7 +1233,7 @@ class ProjectBoard(core.module.Module):
             return self.result("nothing to change", success=False)
 
         entry["updated"] = _now()
-        self.cards.save()
+        self._save()
         self.broadcast_board("card_updated")
 
         return self.result(f"updated {', '.join(changed)} on {entry['id']}: {entry['title']}")
@@ -826,7 +1271,7 @@ class ProjectBoard(core.module.Module):
                 before_id = self.cards[before_index]["id"]
 
         position = self._place(entry, target["id"], index=0 if to_top else None, before_id=before_id)
-        self.cards.save()
+        self._save()
         self.broadcast_board("card_moved")
 
         result = f"moved {entry['id']} ({entry['title']}) to {target['name']}, position {position + 1}"
@@ -870,7 +1315,7 @@ class ProjectBoard(core.module.Module):
             entry["order"] = position
             entry["updated"] = _now()
 
-        self.cards.save()
+        self._save()
         self.broadcast_board("column_reordered")
 
         return self.result(
@@ -920,8 +1365,8 @@ class ProjectBoard(core.module.Module):
                      if entry["order"] <= source.get("order", 0)])
 
         self._place(copy, target["id"], index=below)
-        self.cards.append(copy)
-        self.cards.save()
+        self.card_store.append(copy)
+        self._save()
         self.broadcast_board("card_duplicated")
 
         return self.result(f"copied to {copy['id']} in {target['name']}")
@@ -939,8 +1384,8 @@ class ProjectBoard(core.module.Module):
         if index < 0:
             return self.result(self._not_found("card", card, problem), success=False)
 
-        entry = self.cards.pop(index)
-        self.cards.save()
+        entry = self._drop_card(index)
+        self._save()
         self.broadcast_board("card_deleted")
 
         return self.result(f"deleted card {entry['title']}")
@@ -973,7 +1418,7 @@ class ProjectBoard(core.module.Module):
             "created": _now(),
         })
         entry["updated"] = _now()
-        self.cards.save()
+        self._save()
         self.broadcast_board("comment_added")
 
         return self.result(f"commented on {entry['title']}")
@@ -1008,7 +1453,7 @@ class ProjectBoard(core.module.Module):
 
         comments.pop(found_index)
         entry["updated"] = _now()
-        self.cards.save()
+        self._save()
         self.broadcast_board("comment_deleted")
 
         return self.result("comment removed")
@@ -1043,8 +1488,14 @@ class ProjectBoard(core.module.Module):
                 return self.result(self._not_found("column", after, problem), success=False)
             position = index + 1
 
-        self.columns.insert(position, self._new_column(name, done=done, wip_limit=wip_limit))
-        self.columns.save()
+        column = self._new_column(name, self.board["id"], 0, done=done, wip_limit=wip_limit)
+        self.column_store.append(column)
+
+        layout = [entry for entry in self.columns if entry["id"] != column["id"]]
+        layout.insert(position, column)
+        self._set_column_layout(layout)
+
+        self._save()
         self.broadcast_board("column_added")
 
         return self.result(f"added column {name} at position {position + 1}")
@@ -1089,15 +1540,17 @@ class ProjectBoard(core.module.Module):
 
         if position is not None:
             target = max(0, min(int(position), len(self.columns) - 1))
-            if target != index:
-                self.columns.pop(index)
-                self.columns.insert(target, entry)
+
+            layout = [other for other in self.columns if other["id"] != entry["id"]]
+            layout.insert(target, entry)
+            self._set_column_layout(layout)
+
             changed.append(f"position -> {target + 1}")
 
         if not changed:
             return self.result("nothing to change", success=False)
 
-        self.columns.save()
+        self._save()
         self.broadcast_board("column_updated")
 
         return self.result(f"updated column {entry['name']}: " + ", ".join(changed))
@@ -1146,12 +1599,12 @@ class ProjectBoard(core.module.Module):
                 self._place(card, target["id"])
 
         if mode == "delete":
-            self.cards[:] = [card for card in self.cards if card.get("column") != entry["id"]]
+            self._drop_cards(inside)
 
-        self.columns.pop(index)
+        self.column_store.remove(entry)
+        self._set_column_layout(self.columns)
 
-        self.columns.save()
-        self.cards.save()
+        self._save()
         self.broadcast_board("column_deleted")
 
         if not inside:
@@ -1167,16 +1620,31 @@ class ProjectBoard(core.module.Module):
 
     @core.module.command("board", send_to_ai=False)
     async def cmd_board(self, args: list):
-        """Show the project board. Without arguments it shows the whole board, otherwise it filters by text."""
-        query = " ".join(str(arg) for arg in (args or [])) or None
-        return (await self.read_board(query=query))["content"]
+        """Show the project board. Without arguments it shows the whole board, otherwise it
+        filters by text. `/board switch <name>` switches to another board, `/board list`
+        shows them all."""
+        words = [str(arg) for arg in (args or [])]
+        command = _slug(words[0]) if words else ""
+
+        if command in ("list", "ls", "boards"):
+            return (await self.list_boards())["content"]
+
+        if command in ("switch", "use", "open", "go") and len(words) > 1:
+            return (await self.activate_board(" ".join(words[1:])))["content"]
+
+        return (await self.read_board(query=" ".join(words) or None))["content"]
+
+    @core.module.command("boards", send_to_ai=False)
+    async def cmd_boards(self, args: list):
+        """List every project board with its card counts, and which one is active."""
+        return (await self.list_boards())["content"]
 
     # ------------------------------------------------------------------
     # webui extension api (private methods are skipped by the tool loader)
     # ------------------------------------------------------------------
 
     def _ui_board(self):
-        """everything the board panel needs in one shot"""
+        """everything the board panel needs in one shot, active board first"""
         self._reload()
 
         done_ids = {column["id"] for column in self.columns if column.get("done")}
@@ -1188,6 +1656,12 @@ class ProjectBoard(core.module.Module):
             cards.append(entry)
 
         return {
+            "active": {
+                "id": self.board["id"],
+                "name": self.board["name"],
+                "description": self.board.get("description", ""),
+            } if self.board else None,
+            "boards": self._boards_overview(),
             "columns": [dict(column) for column in self.columns],
             "cards": cards,
             "stats": self._stats(),
@@ -1204,6 +1678,38 @@ class ProjectBoard(core.module.Module):
     @webui.route("board")
     async def _route_board(self, body=None, query=None):
         return self._ui_board()
+
+    @webui.route("board/activate", method="POST")
+    async def _route_board_activate(self, body=None, query=None):
+        """the switcher in the board header. takes {id} and makes that board the one the
+        panel and the tools work on"""
+        body = body or {}
+        return await self.activate_board(body.get("id") or body.get("name"))
+
+    @webui.route("board/create", method="POST")
+    async def _route_board_create(self, body=None, query=None):
+        body = body or {}
+        return await self.create_board(
+            name=body.get("name"),
+            description=body.get("description") or None,
+            columns=body.get("columns") or None,
+            like=body.get("like") or None,
+            activate=bool(body.get("activate", True)),
+        )
+
+    @webui.route("board/update", method="POST")
+    async def _route_board_update(self, body=None, query=None):
+        body = body or {}
+        return await self.edit_board(
+            board=body.get("id"),
+            name=body.get("name"),
+            description=body.get("description"),
+        )
+
+    @webui.route("board/delete", method="POST")
+    async def _route_board_delete(self, body=None, query=None):
+        body = body or {}
+        return await self.delete_board(body.get("id"), force=bool(body.get("force")))
 
     @webui.route("card/create", method="POST")
     async def _route_card_create(self, body=None, query=None):
@@ -1270,7 +1776,7 @@ class ProjectBoard(core.module.Module):
         else:
             position = self._place(entry, target["id"], index=None if position is None else int(position))
 
-        self.cards.save()
+        self._save()
         self.broadcast_board("card_moved")
 
         return self.result({"id": entry["id"], "column": target["name"], "position": position,

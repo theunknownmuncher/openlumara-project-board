@@ -6,7 +6,7 @@
 
 {% macro right() %}
 <button type="button" class="btn pb-header-btn" :class="{ 'active': $store.projectBoard.open }"
-        :title="$store.projectBoard.open ? 'Back to the chat (Esc)' : 'Show the project board'"
+        :title="$store.projectBoard.open ? 'Back to the chat (Esc)' : 'Show the project board: ' + $store.projectBoard.activeBoardName()"
         @click="$store.projectBoard.toggle()">
     {% include 'project-board/svg/board.svg' %}
     <span class="pb-header-count" x-show="$store.projectBoard.stats && $store.projectBoard.stats.total"

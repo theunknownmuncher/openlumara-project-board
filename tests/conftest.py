@@ -88,6 +88,30 @@ def board_manager():
 
 
 @pytest.fixture
+def make_board(isolated_paths):
+    """builds a board on top of chosen settings through the real config path, so a test
+    can watch a setting do its job (or watch old storage get migrated into a board)"""
+    def build(**settings):
+        core.config.config.load({
+            "core": {"data_folder": str(isolated_paths)},
+            "modules": {"settings": {"project-board": dict(settings)}},
+        })
+
+        module = importlib.import_module("user_modules.project-board")
+        instance = module.ProjectBoard(FakeManager())
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(instance.on_ready())
+        finally:
+            loop.close()
+
+        return instance
+
+    return build
+
+
+@pytest.fixture
 def board(board_manager):
     """a ProjectBoard with its storage created fresh in the tmp data folder"""
     module = importlib.import_module("user_modules.project-board")

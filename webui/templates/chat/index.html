@@ -13,7 +13,27 @@
     <div class="pb-toolbar">
         <div class="pb-toolbar-group pb-identity">
             <span class="pb-mark">{% include 'project-board/svg/board.svg' %}</span>
-            <span class="pb-title">Project board</span>
+
+            <select class="pb-input pb-board-select" x-show="boards.length > 1" x-cloak
+                    title="switch to another project board"
+                    x-model="activeBoardId" @change="switchBoard($event.target.value)">
+                <template x-for="board in boards" :key="board.id">
+                    <option :value="board.id" x-text="board.name"></option>
+                </template>
+            </select>
+
+            <span class="pb-title" x-show="boards.length < 2" x-cloak x-text="activeBoardName()"></span>
+
+            <button type="button" class="pb-btn icon" title="new project board (shift + N)"
+                    @click="startNewBoard()">
+                {% include 'svg/add.svg' %}
+            </button>
+            <button type="button" class="pb-btn icon" :class="{ active: showBoardSettings }"
+                    title="this board: rename it, describe it or delete it"
+                    @click="toggleBoardSettings()">
+                {% include 'svg/gear.svg' %}
+            </button>
+
             <span class="pb-summary" x-show="stats" x-cloak>
                 <span x-text="stats ? stats.total + ' cards' : ''"></span>
                 <span class="pb-dot">·</span>
@@ -95,6 +115,38 @@
         </div>
     </div>
 
+    <div class="pb-strip" x-show="creatingBoard" x-cloak>
+        <input class="pb-input" id="pb-new-board-name" type="text" placeholder="new board name"
+               aria-label="new board name" x-model="newBoardName"
+               x-init="$nextTick(() => $el.focus())"
+               @keydown.enter="createBoard()" @keydown.escape="creatingBoard = false">
+        <input class="pb-input pb-strip-wide" type="text" placeholder="what is this project for? (optional)"
+               aria-label="new board description" x-model="newBoardDescription"
+               @keydown.enter="createBoard()" @keydown.escape="creatingBoard = false">
+        <button type="button" class="pb-btn primary" @click="createBoard()">create &amp; switch</button>
+        <label class="pb-check" title="give the new board the same columns as this one">
+            <input type="checkbox" x-model="copyLayout"><span>copy the columns</span>
+        </label>
+    </div>
+
+    <div class="pb-strip" x-show="showBoardSettings" x-cloak>
+        <label class="pb-strip-label" for="pb-board-name">name</label>
+        <input class="pb-input" id="pb-board-name" type="text" x-model="boardDraft.name"
+               @keydown.enter="saveBoard()" @keydown.escape="showBoardSettings = false">
+        <label class="pb-strip-label" for="pb-board-description">purpose</label>
+        <input class="pb-input pb-strip-wide" id="pb-board-description" type="text"
+               placeholder="so you know what this board is for later"
+               x-model="boardDraft.description"
+               @keydown.enter="saveBoard()" @keydown.escape="showBoardSettings = false">
+        <button type="button" class="pb-btn primary" @click="saveBoard()">save</button>
+        <span class="pb-strip-meta" x-text="boardMeta()"></span>
+        <button type="button" class="pb-btn danger" @click="deleteBoard()"
+                :disabled="boards.length < 2"
+                :title="boards.length < 2 ? 'this is your only board' : 'delete this board with all of its cards'">
+            delete board
+        </button>
+    </div>
+
     <div class="pb-progress" x-show="stats && stats.total" x-cloak
          :title="stats ? stats.done + ' of ' + stats.total + ' cards are in a done column' : ''">
         <div class="pb-progress-bar" :style="`width: ${stats ? stats.progress : 0}%`"></div>
@@ -105,6 +157,7 @@
     <div class="pb-help" x-show="showHelp" x-cloak>
         <span><b>alt + b</b> show / hide the board</span>
         <span><b>n</b> new card</span>
+        <span><b>shift + N</b> new board</span>
         <span><b>/</b> search</span>
         <span><b>r</b> reload</span>
         <span><b>Esc</b> back to the chat</span>

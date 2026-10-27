@@ -22,6 +22,15 @@ const PROJECT_BOARD = {
     options: { types: [], priorities: [] },
     settings: { keep_chat_input: true, refresh_interval: 15 },
 
+    boards: [],                // every board, with its counts
+    activeBoardId: "",
+    showBoardSettings: false,
+    boardDraft: { name: "", description: "" },
+    creatingBoard: false,
+    newBoardName: "",
+    newBoardDescription: "",
+    copyLayout: true,
+
     query: "",
     filterAssignee: "",
     filterLabel: "",
@@ -144,6 +153,11 @@ const PROJECT_BOARD = {
             this.stats = board.stats || null;
             this.options = board.options || this.options;
 
+            // the switcher: one entry per project board, with the active one marked
+            this.boards = board.boards || [];
+            this.activeBoardId = board.active ? board.active.id : "";
+            if (!this.showBoardSettings) this.syncBoardDraft();
+
             // settings can change in the module settings dialog without a page reload
             if (board.settings) {
                 this.settings = board.settings;
@@ -168,6 +182,131 @@ const PROJECT_BOARD = {
     },
 
     /* ------------------------------------------------------------------
+       boards: one per project, the active one is what this panel shows
+       ------------------------------------------------------------------ */
+
+    activeBoard() {
+        // the board the server says is active. activeBoardId follows the select box and
+        // moves the moment something is picked, so it is not what the panel is showing yet
+        return this.boards.find(board => board.active) || null;
+    },
+
+    activeBoardName() {
+        const board = this.activeBoard();
+        return board ? board.name : "Project board";
+    },
+
+    boardMeta() {
+        const board = this.activeBoard();
+        if (!board) return "";
+
+        return `${board.cards} cards · ${board.columns} columns · ${board.points} points open`;
+    },
+
+    syncBoardDraft() {
+        const board = this.activeBoard();
+        this.boardDraft = board ? { name: board.name, description: board.description || "" } : { name: "", description: "" };
+    },
+
+    async switchBoard(id) {
+        // x-model has already moved activeBoardId to the picked board, so the board that
+        // is active right now comes from the list, not from activeBoardId
+        const current = this.boards.find(board => board.active) || { id: this.activeBoardId };
+
+        if (!id || current.id === id) {
+            // picking the board you are on: put the select back where it belongs
+            return this.load();
+        }
+
+        try {
+            await simpleApiPost("/api/ext/project-board/board/activate", { id: id });
+        } catch (e) {
+            this.error = this.errorText(e);
+        } finally {
+            await this.load();
+        }
+
+        // labels and assignees belong to a board, so carrying a filter over from the
+        // previous one usually just looks like an empty board
+        this.clearFilters();
+        this.flash(`board: ${this.activeBoardName()}`);
+    },
+
+    startNewBoard() {
+        this.showBoardSettings = false;
+        this.creatingBoard = true;
+        this.newBoardName = "";
+        this.newBoardDescription = "";
+    },
+
+    async createBoard() {
+        const name = this.newBoardName.trim();
+        if (!name) return (this.creatingBoard = false);
+
+        try {
+            await simpleApiPost("/api/ext/project-board/board/create", {
+                name: name,
+                description: this.newBoardDescription.trim(),
+                like: this.copyLayout ? this.activeBoardId : null,
+                activate: true,
+            });
+
+            this.creatingBoard = false;
+            await this.load();
+            this.clearFilters();
+            this.flash(`created ${name}`);
+        } catch (e) {
+            this.error = this.errorText(e);
+        }
+    },
+
+    toggleBoardSettings() {
+        this.creatingBoard = false;
+        this.showBoardSettings = !this.showBoardSettings;
+        if (this.showBoardSettings) this.syncBoardDraft();
+    },
+
+    async saveBoard() {
+        const board = this.activeBoard();
+        if (!board) return;
+
+        try {
+            await simpleApiPost("/api/ext/project-board/board/update", {
+                id: board.id,
+                name: this.boardDraft.name.trim(),
+                description: this.boardDraft.description,
+            });
+
+            await this.load();
+            this.flash("board saved");
+        } catch (e) {
+            this.error = this.errorText(e);
+        }
+    },
+
+    async deleteBoard() {
+        const board = this.activeBoard();
+        if (!board) return;
+
+        if (this.boards.length < 2) return this.flash("that is your only board");
+
+        const warning = `Delete the board "${board.name}"? Its ${board.cards} card(s) and `
+            + `${board.columns} column(s) go with it. This cannot be undone.`;
+        if (!confirm(warning)) return;
+
+        try {
+            await simpleApiPost("/api/ext/project-board/board/delete", { id: board.id, force: true });
+
+            this.showBoardSettings = false;
+            await this.load();
+            this.clearFilters();
+            this.flash(`deleted ${board.name}`);
+        } catch (e) {
+            this.error = this.errorText(e);
+        }
+    },
+
+    /* ------------------------------------------------------------------
        derived board data
        ------------------------------------------------------------------ */
 
@@ -182,6 +321,11 @@ const PROJECT_BOARD = {
         this.filterLabel = "";
         this.filterPriority = "";
         this.filterType = "";
+
+        // the search box writes into the model with a debounce, so clearing only the
+        // model would have the typed text come back a moment later
+        const search = document.getElementById("pb-search");
+        if (search) search.value = "";
     },
 
     matches(card) {
@@ -413,11 +557,21 @@ const PROJECT_BOARD = {
         }
         if (event.altKey || event.ctrlKey || event.metaKey) return;
 
-        if (event.key === "Escape") return this.hide();
+        if (event.key === "Escape") {
+            // escape backs out of an open strip first, and only then out of the board
+            if (this.showBoardSettings) return (this.showBoardSettings = false);
+            if (this.creatingBoard) return (this.creatingBoard = false);
+
+            return this.hide();
+        }
 
         if (event.key === "n") {
             event.preventDefault();
             this.openCreate();
+        }
+        else if (event.key === "N") {
+            event.preventDefault();
+            this.startNewBoard();
         }
         else if (event.key === "/") {
             event.preventDefault();
