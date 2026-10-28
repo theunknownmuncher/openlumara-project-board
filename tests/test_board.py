@@ -559,6 +559,11 @@ def test_the_panel_asset_keeps_itself_current():
         "the switch belongs in the status bar, not in the header"
     assert ".pb-seconds:disabled" in styles, "and disabled is visible as such"
 
+    # left to right: the switch, its interval, and only then when the board was last updated
+    order = [panel.index(marker) for marker in ('class="pb-auto"', 'class="pb-seconds"',
+                                                'class="pb-auto-unit"', 'class="pb-refreshed"')]
+    assert order == sorted(order), "checkbox, seconds, then the last-updated note"
+
 
 async def test_card_routes_roundtrip(board):
     created = await board._route_card_create(body={"title": "ui card", "labels": "a, b", "points": 3})

@@ -349,9 +349,6 @@
     </div>
 
     <div class="pb-statusbar">
-        <span class="pb-loading" x-show="loading">loading..</span>
-        <span class="pb-refreshed" x-show="refreshedAt && !loading"
-              x-text="'updated ' + timeAgo(refreshedAt)"></span>
         <label class="pb-auto" title="reload the board on a timer while it is on screen. unticked, it still reloads when you open it, when you come back to the tab, on r, and the moment your AI changes it">
             <input type="checkbox" x-model="autoRefresh" @change="applyRefreshPrefs()">
             <span>auto-refresh</span>
@@ -361,6 +358,9 @@
                aria-label="seconds between refreshes" title="every how many seconds"
                @change="applyRefreshPrefs()" @keyup.enter="applyRefreshPrefs()">
         <span class="pb-auto-unit" :class="{ 'pb-dim': !autoRefresh }">sec</span>
+        <span class="pb-loading" x-show="loading">loading..</span>
+        <span class="pb-refreshed" x-show="refreshedAt && !loading"
+              x-text="'updated ' + timeAgo(refreshedAt)"></span>
         <span class="pb-notice" x-show="notice" x-text="notice" x-cloak></span>
         <span class="pb-error" x-show="error" x-text="error" x-cloak></span>
         <span class="pb-count-hint" x-show="filtersActive() && !loading"
