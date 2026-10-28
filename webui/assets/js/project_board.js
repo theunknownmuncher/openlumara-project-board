@@ -7,8 +7,9 @@
    card + column editors. Talks to /api/ext/project-board/ and to the module's
    {type: "project_board"} websocket broadcasts. */
 
-/* how often the panel refreshes itself while it is on screen. board changes are pushed
-   over the websocket, so this is the safety net for anything the push missed */
+/* the interval auto-refresh starts out with, and what the panel falls back to when the
+   number in the status bar is not usable. board changes are pushed over the websocket, so
+   the timer is the safety net for anything the push missed - and it is optional */
 const PB_REFRESH_SECONDS = 5;
 
 const PROJECT_BOARD = {
@@ -59,6 +60,10 @@ const PROJECT_BOARD = {
 
     drag: { card: null, column: null, target: null, index: -1, kind: "" },
     columnDrag: null,
+
+    // auto-refresh is optional and tuned from the status bar; the choice is kept per browser
+    autoRefresh: localStorage.getItem("pb.autorefresh") !== "0",
+    refreshSecondsText: localStorage.getItem("pb.refresh-seconds") || String(PB_REFRESH_SECONDS),
 
     _timer: null,
     _timerSeconds: 0,          // the interval the running timer was started with
@@ -120,18 +125,41 @@ const PROJECT_BOARD = {
         }
     },
 
-    /* the board keeps itself current on its own: it loads the moment it is opened and
-       then every PB_REFRESH_SECONDS (five seconds) while it stays on screen. A hidden
-       tab is left alone - browsers throttle its timers anyway, and the visibilitychange
-       handler above catches it up the moment it is looked at again. */
+    /* while the board is on screen and auto-refresh is ticked, it reloads every
+       refreshSeconds() so it is never the state you left behind. a hidden tab is left
+       alone - browsers throttle its timers anyway, and the visibilitychange handler in
+       mount() catches it up the moment it is looked at again. with auto-refresh unticked
+       the board still reloads on open, on tab focus, on the r key and on every push. */
     startPolling() {
         this.stopPolling();
-        if (!this.open) return;
+        if (!this.open || !this.autoRefresh) return;
 
-        this._timerSeconds = PB_REFRESH_SECONDS;
+        this._timerSeconds = this.refreshSeconds();
         this._timer = setInterval(() => {
             if (document.visibilityState === "visible") this.load();
-        }, PB_REFRESH_SECONDS * 1000);
+        }, this._timerSeconds * 1000);
+    },
+
+    /* the seconds live in a text field, so they are parsed and clamped here instead of
+       being trusted: anything silly you typed falls back to the default interval */
+    refreshSeconds() {
+        const seconds = parseInt(this.refreshSecondsText, 10);
+
+        if (!Number.isFinite(seconds) || seconds < 1) return PB_REFRESH_SECONDS;
+
+        return Math.min(seconds, 24 * 3600);
+    },
+
+    // one handler for the checkbox and for the seconds field: remember the choice and put
+    // the timer into the state it describes, without waiting for a reopen
+    applyRefreshPrefs() {
+        const seconds = this.refreshSeconds();
+        this.refreshSecondsText = String(seconds);
+
+        localStorage.setItem("pb.autorefresh", this.autoRefresh ? "1" : "0");
+        localStorage.setItem("pb.refresh-seconds", String(seconds));
+
+        this.startPolling();
     },
 
     stopPolling() {

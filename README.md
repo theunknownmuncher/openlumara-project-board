@@ -50,12 +50,13 @@ full-screen board.
   blocked, overdue) and a blocked / overdue pill in the header
 - `n` new card, `shift + N` new board, `/` search, `r` reload, `Esc` back to the chat, and
   `alt + ←/→/↑/↓` to move the focused card between columns or reorder it — no mouse needed
-- it keeps itself current: the board loads the moment you open it, then every 5 seconds
-  while it stays on screen, and again when you come back to the tab. On top of that it reacts
-  to your AI changing or switching boards and to another tab changing it (websocket push), and
-  reloads after each AI turn. Changes made by hand are picked up by the AI the same way: every
-  tool reloads from disk first. There is no setting to tune this: five seconds is what
-  the panel does
+- it keeps itself current. It loads the moment you open it, and while it stays on screen it
+  reloads on a timer you control from the bottom status bar: an **auto-refresh** checkbox plus a
+  field for the interval in seconds (5 by default). With the box unticked and its field greyed
+  out, the board still reloads when you open it, when you come back to the tab, on `r`, and the
+  instant your AI changes something (websocket push). Both choices are remembered per browser.
+  Changes you make by hand are picked up by the AI the same way: every tool reloads from disk
+  first
 - works on a phone: the switcher and both strips wrap, one column at a time, swipe sideways,
   card dialogs stack vertically
 
@@ -156,8 +157,9 @@ Board data lives in OpenLumara's data folder, as plain JSON you can eyeball or h
 
 ## Notes
 
-- the panel's five second refresh is not a setting anymore (it used to be `refresh_interval`).
-  A leftover `refresh_interval` line in your `config.yml` is simply ignored.
+- auto-refresh is a preference of the panel (status bar, kept in `localStorage`), not a module
+  setting. It used to be the `refresh_interval` module setting; a leftover line for it in
+  `config.yml` is ignored.
 - **WIP limits warn, they do not block.** Going over a limit is a decision, not an error, so both
   the panel and the tools answer with a warning instead of a refusal.
 - **Deleting a board deletes its cards.** It refuses while the board still has cards unless you

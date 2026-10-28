@@ -536,17 +536,28 @@ async def test_board_route_returns_everything_the_panel_needs(board):
 
 
 def test_the_panel_asset_keeps_itself_current():
-    """the auto-refresh behaviour lives in the shipped asset rather than in the settings,
-    so it is locked in here: refresh on open, refresh on a five second timer while open,
-    refresh when the tab is looked at again, and no polling once the panel is closed"""
-    script = (pathlib.Path(__file__).resolve().parent.parent
-              / "webui" / "assets" / "js" / "project_board.js").read_text()
+    """the refresh behaviour lives in the shipped assets rather than in the module, so it is
+    locked in here: reload on open, an optional timer you can switch off and retime from the
+    status bar, that switch remembered per browser, and no polling once the panel is closed"""
+    module_dir = pathlib.Path(__file__).resolve().parent.parent
+    script = (module_dir / "webui" / "assets" / "js" / "project_board.js").read_text()
+    panel = (module_dir / "webui" / "templates" / "chat" / "index.html").read_text()
+    styles = (module_dir / "webui" / "assets" / "css" / "project_board.css").read_text()
 
-    assert "const PB_REFRESH_SECONDS = 5;" in script
     assert "await this.refresh(true);" in script, "opening the board reloads it"
-    assert "}, PB_REFRESH_SECONDS * 1000);" in script, "and then keeps reloading on that timer"
-    assert '"visibilitychange"' in script, "coming back to the tab reloads it as well"
-    assert "this.stopPolling();" in script, "closing the board stops the timer"
+    assert "if (!this.open || !this.autoRefresh) return;" in script, "the timer honours the switch"
+    assert "const PB_REFRESH_SECONDS = 5;" in script, "five seconds is where it starts out"
+    assert 'localStorage.setItem("pb.autorefresh"' in script, "the switch is remembered"
+    assert 'localStorage.setItem("pb.refresh-seconds"' in script, "and so is the interval"
+
+    # the switch and its seconds field sit in the status bar at the bottom, and the field
+    # is disabled while auto-refresh is unticked
+    assert 'class="pb-statusbar"' in panel
+    assert 'class="pb-auto"' in panel and 'x-model="autoRefresh"' in panel
+    assert 'x-model="refreshSecondsText"' in panel and ':disabled="!autoRefresh"' in panel
+    assert panel.index('class="pb-statusbar"') < panel.index('class="pb-auto"'), \
+        "the switch belongs in the status bar, not in the header"
+    assert ".pb-seconds:disabled" in styles, "and disabled is visible as such"
 
 
 async def test_card_routes_roundtrip(board):
