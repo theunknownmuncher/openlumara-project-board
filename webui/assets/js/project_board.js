@@ -68,6 +68,7 @@ const PROJECT_BOARD = {
     _timer: null,
     _timerSeconds: 0,          // the interval the running timer was started with
     _watchingTab: false,
+    _chatScroll: null,         // where the chat was scrolled to while the board covers it
     _chain: Promise.resolve(),
 
     /* ------------------------------------------------------------------
@@ -82,6 +83,11 @@ const PROJECT_BOARD = {
     async show() {
         this.open = true;
         localStorage.setItem("pb.open", "true");
+
+        // the board covers the chat, it does not reset it: remember where the chat was
+        // scrolled to while it is still laid out, hide() puts it back
+        this.captureChatScroll();
+
         this.applyBodyClass();
 
         // opening the panel always pulls the current board, and the timer starts with it
@@ -94,12 +100,107 @@ const PROJECT_BOARD = {
         localStorage.setItem("pb.open", "false");
         this.applyBodyClass();
         this.stopPolling();
+
+        // #messages is laid out again from here, so the reading position goes back to the
+        // chat once the browser has had a frame to remeasure the turns
+        this.restoreChatScroll();
     },
 
     applyBodyClass() {
         document.body.classList.toggle("pb-board-open", this.open);
         // keep_chat_input off: the board is full-screen, so the input goes too
         document.body.classList.toggle("pb-hide-input", this.open && !this.settings.keep_chat_input);
+    },
+
+    /* ------------------------------------------------------------------
+       chat scroll handoff. opening the board takes #messages out of the
+       layout, and a display:none container has no scroll position left to
+       come back to, so where the chat was is remembered here and restored
+       when the board is closed again.
+       ------------------------------------------------------------------ */
+
+    captureChatScroll() {
+        const el = document.getElementById("messages");
+
+        this._chatScroll = null;
+        if (!el) return;
+
+        const containerTop = el.getBoundingClientRect().top;
+        const anchor = [...el.querySelectorAll("[data-turn-index]")]
+            .find(turn => turn.getBoundingClientRect().bottom > containerTop);
+
+        this._chatScroll = {
+            // switching to another chat while the board is open means there is nothing of
+            // yours to put back, the new chat is where the chat itself left it
+            chat: Alpine.store("chat") ? Alpine.store("chat").selectedChat : null,
+
+            // the chat's own follow-the-bottom tolerance: sitting there means you want the
+            // newest message, not the exact pixel you were at
+            atBottom: el.scrollHeight - el.scrollTop - el.clientHeight < 50,
+
+            top: el.scrollTop,
+
+            // anchored on the turn at the top of the view rather than on a bare pixel
+            // offset, because turns are lazily mounted and an unmounted one only stands as
+            // tall as the height the chat captured for it - so pixel offsets drift while
+            // the turn itself does not
+            turn: anchor ? Number(anchor.dataset.turnIndex) : null,
+            gap: anchor ? anchor.getBoundingClientRect().top - containerTop : 0,
+        };
+    },
+
+    async restoreChatScroll() {
+        const saved = this._chatScroll;
+        this._chatScroll = null;
+
+        const chat = Alpine.store("chat");
+        const switched = Boolean(saved && saved.chat && chat && chat.selectedChat !== saved.chat);
+
+        // with no anchor - the board was already open when the page loaded - or with the
+        // chat switched underneath the board, the chat tried to place itself while
+        // #messages had no layout at all and would come back sitting at its top. a chat you
+        // have just opened belongs at its newest message, so that is where it is handed back
+        if (!saved || switched || saved.atBottom) return this._placeChatScroll({ bottom: true });
+
+        return this._placeChatScroll(saved);
+    },
+
+    async _placeChatScroll(where) {
+        const ui = Alpine.store("ui");
+
+        // same shape as the chat's own scrollToTurn: heights settle over several frames as
+        // turns are mounted back in, markdown renders and images arrive, so the position is
+        // re-applied until it stops moving instead of being guessed once
+        let lastTop = -1;
+        let lastHeight = -1;
+
+        for (let attempt = 0; attempt < 24; attempt++) {
+            const el = document.getElementById("messages");
+            if (!el) return;
+
+            if (ui) ui.updateMounts();
+            await Alpine.nextTick();
+
+            if (where.bottom) {
+                el.scrollTo({ top: el.scrollHeight, behavior: "instant" });
+            } else {
+                const turn = where.turn === null ? null : el.querySelector(`[data-turn-index="${where.turn}"]`);
+
+                if (turn) {
+                    const drift = turn.getBoundingClientRect().top - el.getBoundingClientRect().top - where.gap;
+                    el.scrollTo({ top: el.scrollTop + drift, behavior: "instant" });
+                } else {
+                    el.scrollTo({ top: where.top, behavior: "instant" });
+                }
+            }
+
+            await new Promise(resolve => requestAnimationFrame(resolve));
+
+            if (el.scrollTop === lastTop && el.scrollHeight === lastHeight) return;
+
+            lastTop = el.scrollTop;
+            lastHeight = el.scrollHeight;
+        }
     },
 
     async mount() {

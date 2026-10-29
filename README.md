@@ -35,6 +35,9 @@ full-screen board.
 ### The board panel (WebUI)
 
 - a toggle button in the chat header (with a live card count), or `alt + b` from anywhere
+- the board covers the chat instead of resetting it: close it and the chat is scrolled back to
+  exactly where you left it, even if the AI added messages in the meantime. A chat you opened
+  while the board was covering it comes back at its newest message
 - columns with card counts, story point totals and WIP limits (a column over its limit is
   flagged in red, both in the header and when the AI pushes past it)
 - **drag & drop** cards between columns and **reorder** them inside a column (a drop line shows
@@ -142,10 +145,14 @@ webui/assets/js/project_board.js                <- panel logic (Alpine store "pr
 webui/assets/css/project_board.css              <- board + dialog styles (everything is namespaced under .pb-)
 tests/conftest.py                               <- self-contained fixtures (tmp data folder, fake manager)
 tests/test_board.py                             <- tool surface, routes, stats, boards and prompts
+pytest.ini                                      <- so the suite runs on its own, wherever the repo's own pytest config lives
 LICENSE                                         <- GPL-3.0-or-later
 README.md                                       <- this file
 .gitignore                                      <- python/editor/OS artifacts
 ```
+
+Run the suite with `pytest user_modules/project-board/tests`. The module ships its own
+`pytest.ini`, so that works from anywhere and needs nothing from openlumara's own pytest config.
 
 Board data lives in OpenLumara's data folder, as plain JSON you can eyeball or hand-edit:
 

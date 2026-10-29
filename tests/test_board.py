@@ -565,6 +565,29 @@ def test_the_panel_asset_keeps_itself_current():
     assert order == sorted(order), "checkbox, seconds, then the last-updated note"
 
 
+def test_the_panel_hands_the_chat_scroll_position_back():
+    """opening the board takes #messages out of the layout, and a container that is out of
+    the layout has no scroll position left to come back to, so the panel remembers where the
+    chat was scrolled to and puts it back when the board is closed"""
+    module_dir = pathlib.Path(__file__).resolve().parent.parent
+    script = (module_dir / "webui" / "assets" / "js" / "project_board.js").read_text()
+
+    show = script[script.index("async show() {"):script.index("hide() {")]
+    hide = script[script.index("    hide() {"):script.index("applyBodyClass() {")]
+
+    assert "this.captureChatScroll();" in show, "opening remembers where the chat was"
+    assert show.index("captureChatScroll()") < show.index("applyBodyClass()"), \
+        "and it reads the position while the chat is still laid out, not after"
+    assert "this.restoreChatScroll();" in hide, "closing gives it back"
+
+    # anchored on the turn at the top of the view rather than on a bare pixel offset, since
+    # turns are lazily mounted and the offsets drift as they come back in
+    assert '[data-turn-index]' in script
+    assert "ui.updateMounts()" in script, "the lazy mounts are nudged along while it settles"
+    assert "selectedChat" in script, "a chat switched underneath the board is left alone"
+    assert "{ bottom: true }" in script, "a chat with nothing to hand back goes to its newest"
+
+
 async def test_card_routes_roundtrip(board):
     created = await board._route_card_create(body={"title": "ui card", "labels": "a, b", "points": 3})
     assert created["status"] == "success"
