@@ -99,7 +99,8 @@ will do when you say "I just played that card".
 If your project uses [OpenSpec](https://github.com/Fission-AI/OpenSpec), the board reads it
 instead of retyping it.
 
-- the ✨ button opens **process spec**: paste what you want built, preview the prompt, and it
+- the **process spec** button, dressed like **new card** because it is the other way a card gets
+  made, opens the dialog: paste what you want built, preview the prompt, and it
   fills your chat with a prompt (from the `spec_action_prompt` setting, yours to rewrite) that
   tells your AI to turn the spec into an OpenSpec change and land its stories in the backlog.
   The spec itself never lands on the board — only the work it produced

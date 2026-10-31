@@ -104,13 +104,15 @@
             <button type="button" class="pb-btn primary" title="new card (n)" @click="openCreate()">
                 {% include 'svg/add.svg' %}<span>new card</span>
             </button>
+            <!-- landing a spec is the other way a card gets made, so it is dressed the same way and
+                 sits next to new card rather than buried among the icon buttons -->
+            <button type="button" class="pb-btn primary" title="process a spec into stories (s)"
+                    @click="openSpec()">
+                {% include 'svg/sparkle.svg' %}<span>process spec</span>
+            </button>
             <button type="button" class="pb-btn icon" title="prompt actions: the prompts your play buttons fill into the chat (a)"
                     :class="{ active: actionEditor }" @click="openActions()">
                 {% include 'svg/wrench.svg' %}
-            </button>
-            <button type="button" class="pb-btn icon" title="process a spec into stories (s)"
-                    @click="openSpec()">
-                {% include 'svg/sparkle.svg' %}
             </button>
             <button type="button" class="pb-btn icon" title="copy the cards you can see as a numbered brief (c)"
                     @click="copyBrief()">

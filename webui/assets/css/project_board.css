@@ -1344,6 +1344,12 @@ body.pb-board-open.pb-hide-input.pb-input-peek #chat-window > #input {
         max-width: 44vw;
     }
 
+    /* two labelled buttons will not sit side by side on a phone. both drop their words and keep
+       their icon, so they stay the same shape as each other at every width */
+    .pb-actions .pb-btn.primary span {
+        display: none;
+    }
+
     .pb-strip {
         padding: 6px 8px;
     }
