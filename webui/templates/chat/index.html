@@ -104,6 +104,23 @@
             <button type="button" class="pb-btn primary" title="new card (n)" @click="openCreate()">
                 {% include 'svg/add.svg' %}<span>new card</span>
             </button>
+            <button type="button" class="pb-btn icon" title="prompt actions: the prompts your play buttons fill into the chat (a)"
+                    :class="{ active: actionEditor }" @click="openActions()">
+                {% include 'svg/wrench.svg' %}
+            </button>
+            <button type="button" class="pb-btn icon" title="process a spec into stories (s)"
+                    @click="openSpec()">
+                {% include 'svg/sparkle.svg' %}
+            </button>
+            <button type="button" class="pb-btn icon" title="copy the cards you can see as a numbered brief (c)"
+                    @click="copyBrief()">
+                {% include 'svg/copy.svg' %}
+            </button>
+            <button type="button" class="pb-btn icon" x-show="openspecReady()" x-cloak
+                    :class="{ active: showOpenspec }" title="openspec changes in flight"
+                    @click="toggleOpenspec()">
+                {% include 'svg/layers.svg' %}
+            </button>
             <button type="button" class="pb-btn icon" title="reload the board (r)" @click="refresh(true)">
                 {% include 'svg/reload.svg' %}
             </button>
@@ -147,6 +164,57 @@
         </button>
     </div>
 
+    <div class="pb-strip" x-show="showOpenspec" x-cloak>
+        <span class="pb-strip-label">openspec</span>
+
+        <select class="pb-input" title="what one card stands for when a change is imported"
+                x-model="openspec.unit" @change="setOpenspecUnit($event.target.value)">
+            <option value="requirements">one story per requirement</option>
+            <option value="tasks">one card per tasks.md checkbox</option>
+            <option value="both">stories plus the task checklist</option>
+        </select>
+
+        <label class="pb-check" title="also file one epic card holding the change itself">
+            <input type="checkbox" x-model="openspec.as_epic"><span>one epic per change</span>
+        </label>
+
+        <button type="button" class="pb-btn" title="read the changes again" @click="loadOpenspec()"
+                :disabled="openspecLoading">reload</button>
+        <span class="pb-strip-meta" x-text="openspecLoading ? 'reading..' : (openspec.roots || []).join(', ')"></span>
+    </div>
+
+    <div class="pb-openspec" x-show="showOpenspec" x-cloak>
+        <template x-if="openspec.problem">
+            <p class="pb-openspec-problem" x-text="openspec.problem"></p>
+        </template>
+
+        <template x-for="change in openspec.changes" :key="change.id">
+            <div class="pb-openspec-row">
+                <span class="pb-openspec-id" x-text="change.id"></span>
+                <span class="pb-openspec-meta"
+                      :title="'requirements with no scenario cannot be checked off against anything yet'"
+                      x-text="[
+                          change.requirements + ' requirement(s)',
+                          change.tasks_done + '/' + change.tasks + ' tasks checked',
+                          change.on_board + ' card(s) on the board',
+                          change.untestable ? change.untestable + ' without a scenario' : '',
+                          change.skip_specs ? 'skip_specs' : '',
+                      ].filter(Boolean).join(' · ')"></span>
+                <button type="button" class="pb-btn" :disabled="openspecLoading"
+                        title="turn this change into cards, reading the files rather than from memory"
+                        @click="importChange(change)">
+                    land stories
+                </button>
+            </div>
+        </template>
+
+        <p class="pb-openspec-note">
+            reading only - the board never writes into your project, and it never runs the openspec
+            CLI. re-importing refreshes the cards it made instead of duplicating them.
+            <span x-show="openspecNote" x-text="'last: ' + openspecNote"></span>
+        </p>
+    </div>
+
     <div class="pb-progress" x-show="stats && stats.total" x-cloak
          :title="stats ? stats.done + ' of ' + stats.total + ' cards are in a done column' : ''">
         <div class="pb-progress-bar" :style="`width: ${stats ? stats.progress : 0}%`"></div>
@@ -160,12 +228,17 @@
         <span><b>shift + N</b> new board</span>
         <span><b>/</b> search</span>
         <span><b>r</b> reload</span>
+        <span><b>a</b> prompt actions</span>
+        <span><b>s</b> process a spec</span>
+        <span><b>c</b> copy the visible cards as a brief</span>
+        <span><b>p</b> play the focused card (shift + p for the others)</span>
         <span><b>Esc</b> back to the chat</span>
         <span><b>click a card</b> open it</span>
         <span><b>drag a card</b> move or prioritize it</span>
         <span><b>alt + &larr; / &rarr;</b> move a focused card between columns</span>
         <span><b>alt + &uarr; / &darr;</b> reorder a focused card</span>
         <span><b>double-click a column title</b> rename it</span>
+        <span>play buttons only fill the chat input - you still press enter</span>
         <span>ask your AI to run the board: it has tools for all of this and its changes appear instantly</span>
     </div>
 
@@ -291,6 +364,17 @@
                                               :title="card.assignee" x-text="initials(card)"></span>
                                     </span>
                                     <span class="pb-card-arrows">
+                                        <template x-if="actionsEnabled() && actionsFor(card).length">
+                                            <span class="pb-play">
+                                                <button type="button" class="pb-icon play"
+                                                        :title="'play: ' + primaryAction(card).name + ' - fills the chat input, you press enter'"
+                                                        @click.stop="playAction(card, primaryAction(card))">&#9654;</button>
+                                                <button type="button" class="pb-icon"
+                                                        x-show="actionsFor(card).length > 1"
+                                                        title="the other prompt actions for this card (shift + p)"
+                                                        @click.stop="toggleMenu(card)">&hellip;</button>
+                                            </span>
+                                        </template>
                                         <button type="button" class="pb-icon" title="previous column (alt + left)"
                                                 @click.stop="shiftColumn(card, 'previous')">&larr;</button>
                                         <button type="button" class="pb-icon" title="next column (alt + right)"
@@ -298,6 +382,25 @@
                                     </span>
                                 </div>
                             </article>
+
+                            {# more than one action applies to this card: the rest of them, plus
+                               copying a prompt instead of filling the input with it #}
+                            <div class="pb-menu" x-show="menuOpen(card)" @click.outside="openMenu = ''"
+                                 @keydown.escape.window="openMenu = ''" x-cloak>
+                                <template x-for="action in actionsFor(card)" :key="action.id">
+                                    <div class="pb-menu-row">
+                                        <button type="button" @click.stop="playAction(card, action)"
+                                                :title="action.template" x-text="action.name"></button>
+                                        <button type="button" class="pb-icon" title="copy this prompt instead"
+                                                @click.stop="copyActionPrompt(card, action)">
+                                            {% include 'svg/copy.svg' %}
+                                        </button>
+                                    </div>
+                                </template>
+                                <button type="button" class="pb-menu-foot" @click.stop="openActions()">
+                                    edit prompt actions&hellip;
+                                </button>
+                            </div>
                         </div>
                     </template>
 
@@ -361,6 +464,11 @@
         <span class="pb-loading" x-show="loading">loading..</span>
         <span class="pb-refreshed" x-show="refreshedAt && !loading"
               x-text="'updated ' + timeAgo(refreshedAt)"></span>
+        <span class="pb-copied" x-show="copied" x-text="copied + ' to clipboard'" x-cloak></span>
+        <span class="pb-action-hint" x-show="actionsEnabled() && !actions.length && loaded" x-cloak>
+            no play buttons yet - <button type="button" class="pb-link" @click="openActions()">set one up</button>
+            or press <b>a</b>
+        </span>
         <span class="pb-notice" x-show="notice" x-text="notice" x-cloak></span>
         <span class="pb-error" x-show="error" x-text="error" x-cloak></span>
         <span class="pb-count-hint" x-show="filtersActive() && !loading"

@@ -1,0 +1,63 @@
+{# project-board -- Copyright (C) 2026 theunknownmuncher <theunknownmuncher@protonmail.com>
+   SPDX-License-Identifier: GPL-3.0-or-later #}
+{# -- AI-GENERATED CODE (Qwen3.8 Flash Next) :: (2026-10-29) status:reviewed harness:openlumara --
+   Process spec dialog: paste a spec in, get the templated prompt into the chat. The prompt comes
+   from the module's spec_action_prompt setting and is rendered server side, so the preview is the
+   real thing. Auto-discovered from templates/modals/, opened with
+   $store.ui.openModal('project_board_spec'). #}
+
+<template x-if="$store.ui.currentModal === 'project_board_spec' && $store.projectBoard" x-cloak>
+    <div class="modal pb-spec-modal" @keydown.escape.window="$store.projectBoard.closeSpec()">
+        <div class="header">
+            <h2>Process a spec</h2>
+            <button class="close" @click="$store.projectBoard.closeSpec()"
+                    aria-label="Close the spec dialog">&times;</button>
+        </div>
+
+        <div class="pb-modal-body">
+            <p class="pb-modal-note">
+                Paste what you want built. <b>Process spec</b> fills the prompt from the module's
+                <code>spec_action_prompt</code> setting - with your spec and this board's names in it -
+                into the chat input, where you can still read it and edit it before you press enter.
+                What happens next is up to that prompt: by default your AI turns the spec into an
+                OpenSpec change and lands its stories in the backlog, and the spec itself stays out of
+                the board - only the work ends up on it.
+            </p>
+
+            <label class="pb-field-label" for="pb-spec-title">what is this spec called</label>
+            <input id="pb-spec-title" class="pb-input" type="text" placeholder="scoring rewrite"
+                   x-model="$store.projectBoard.specDraft.title"
+                   x-init="$nextTick(() => $el.focus())">
+
+            <label class="pb-field-label" for="pb-spec-body">the spec</label>
+            <textarea id="pb-spec-body" class="pb-input pb-spec-body" rows="14"
+                      placeholder="paste or type it here - requirements, constraints, the parts you have already decided.."
+                      x-model="$store.projectBoard.specDraft.spec"></textarea>
+
+            <p class="pb-spec-warning" x-show="$store.projectBoard.specWarning()"
+               x-text="$store.projectBoard.specWarning()" x-cloak></p>
+
+            <div class="pb-spec-meta">
+                <span x-text="($store.projectBoard.specDraft.spec || '').length + ' characters'"></span>
+                <button type="button" class="pb-btn" @click="$store.projectBoard.previewSpec()"
+                        :disabled="$store.projectBoard.specDraft.busy || !$store.projectBoard.specDraft.spec.trim()">
+                    <span x-text="$store.projectBoard.specDraft.showPreview ? 'refresh preview' : 'preview the prompt'"></span>
+                </button>
+            </div>
+
+            <template x-if="$store.projectBoard.specDraft.showPreview">
+                <pre class="pb-spec-preview" x-text="$store.projectBoard.specDraft.preview"></pre>
+            </template>
+
+            <div class="pb-modal-actions">
+                <span class="pb-error" x-show="$store.projectBoard.error" x-text="$store.projectBoard.error" x-cloak></span>
+                <button type="button" class="pb-btn" @click="$store.projectBoard.closeSpec()">cancel</button>
+                <button type="button" class="pb-btn primary"
+                        :disabled="$store.projectBoard.specDraft.busy || !$store.projectBoard.specDraft.spec.trim()"
+                        @click="$store.projectBoard.processSpec()">
+                    process spec &rarr; chat input
+                </button>
+            </div>
+        </div>
+    </div>
+</template>

@@ -23,6 +23,8 @@ import channels.webui.api as webui
 
 import asyncio
 import datetime
+import os
+import re
 import secrets
 import ulid
 
@@ -41,6 +43,257 @@ DONE_COLUMN_NAMES = ("done", "closed", "complete", "completed")
 # name of the board a fresh install starts with, and what the first board is called when
 # storage from before boards existed gets migrated
 DEFAULT_BOARD_NAME = "General"
+
+# ----------------------------------------------------------------------
+# prompt actions: templates you write yourself, with the card's fields in them
+# ----------------------------------------------------------------------
+
+# what a template can reach for. replacement is plain string replacement rather than
+# str.format on purpose: a template full of json, code or just braces in prose survives
+# untouched, nothing can reach into python objects, and an unknown {thing} stays exactly as
+# it was written instead of blowing up on someone's hand written prose.
+CARD_PLACEHOLDERS = ("id", "title", "description", "column", "board", "type", "priority",
+                     "assignee", "labels", "points", "due", "comments", "change", "date")
+SPEC_PLACEHOLDERS = ("title", "spec", "board", "backlog", "date")
+
+# the templates the action editor offers as a starting point. they are never created on
+# their own - picking one fills the editor, and what you save is yours from then on.
+ACTION_EXAMPLES = [
+    {
+        "name": "Implement this task",
+        "column": "",
+        "blurb": "read what you need, plan, implement, move the card to done when tests pass",
+        "template": """Work on card {id} ("{title}") on the {board} board, which sits in {column}.
+
+{description}
+
+Read the parts of the repository you need first, then plan briefly and implement it. Keep the
+change small and coherent, run the tests your work touches, and move the card to Done with
+project-board_move_card once they pass. If you turn up more work, put it on the board as cards of
+its own instead of quietly doing it. Tell me what changed and where.""",
+    },
+    {
+        "name": "Plan this task first",
+        "column": "Backlog",
+        "blurb": "a step by step plan and open questions, no code changes",
+        "template": """Plan card {id} ("{title}") on the {board} board. Do not write or edit any code.
+
+{description}
+
+Read what you need to, then give me a step by step plan: the files you would touch, the order,
+the risks, and how each step gets verified. Ask the questions you would need answered before
+starting, and suggest a points estimate.""",
+    },
+    {
+        "name": "Break this into subtasks",
+        "column": "",
+        "blurb": "split the card into one-sitting cards right below it",
+        "template": """Break card {id} ("{title}") on the {board} board into smaller cards you could each
+finish in one sitting, in the order they should be done.
+
+{description}
+
+Add them with project-board_add_cards in one call, directly below this card in {column}, and name
+this card's id in each of their descriptions. Do not implement anything yet.""",
+    },
+    {
+        "name": "Draft acceptance criteria",
+        "column": "Backlog",
+        "blurb": "measurable criteria written into the card's description",
+        "template": """Card {id} ("{title}") on the {board} board has no usable acceptance criteria yet:
+
+{description}
+
+Write measurable acceptance criteria for it - what has to be observably true when the card is done
+- and put them into the card's description with project-board_edit_card. Keep what the
+description already gets right. Cover the edge cases and say what is out of scope.""",
+    },
+    {
+        "name": "Estimate this",
+        "column": "Backlog",
+        "blurb": "story points plus the reasoning, as points on the card and a comment",
+        "template": """Estimate card {id} ("{title}") on the {board} board:
+
+{description}
+
+Give me a story point value with your reasoning, and name the thing that makes the estimate
+uncertain. Then set the points with project-board_edit_card and leave the reasoning as a comment
+on the card.""",
+    },
+    {
+        "name": "Triage this bug",
+        "column": "Backlog",
+        "blurb": "reproduce, narrow the cause, set priority - without fixing it",
+        "template": """Triage card {id} ("{title}") on the {board} board:
+
+{description}
+
+Reproduce it, narrow down the cause, and say how big the fix looks. Do not fix it yet. Set a
+realistic priority on the card, mark it blocked if it waits on something, and comment what you
+found plus the first thing the next person should try.""",
+    },
+    {
+        "name": "Fix this bug",
+        "column": "In Progress",
+        "blurb": "root cause, minimal fix, regression test, then move it to done",
+        "template": """Fix card {id} ("{title}") on the {board} board:
+
+{description}
+
+Find the root cause rather than the symptom, keep the fix minimal, and add the regression test
+that would have caught it. Run the tests. Move the card to Done with project-board_move_card and
+comment on what the cause was and what you changed.""",
+    },
+    {
+        "name": "Write tests for this",
+        "column": "In Progress",
+        "blurb": "cover the behaviour the card describes and report the gaps",
+        "template": """Card {id} ("{title}") on the {board} board needs test coverage:
+
+{description}
+
+Cover the behaviour the card describes - happy path, the edges, the failure modes - in the
+project's own test style. Tell me which gaps you could not cover and why. Do not fix bugs you
+find on the way; write them onto the board as bug cards instead.""",
+    },
+    {
+        "name": "Review this change",
+        "column": "In Review",
+        "blurb": "compare what is on disk against what the card asked for",
+        "template": """Review the work behind card {id} ("{title}") on the {board} board:
+
+{description}
+
+Compare what is actually in the working tree against what the card asks for. List must-fix issues
+separately from nice-to-have ones, say whether the tests cover it, and go through the acceptance
+criteria one by one. Change nothing yourself.""",
+    },
+    {
+        "name": "Finish this card",
+        "column": "In Review",
+        "blurb": "address the review comments, move to done, note what changed",
+        "template": """Wrap up card {id} ("{title}") on the {board} board:
+
+{description}
+
+Work through the open review comments on the card and fix what they ask for, then move the card to
+Done with project-board_move_card and leave a short note about what changed and where.""",
+    },
+    {
+        "name": "Write session notes",
+        "column": "",
+        "blurb": "a comment on the card for whoever picks this up next",
+        "template": """You are working on card {id} ("{title}") on the {board} board.
+
+When you stop - now or later - write a comment on this card with project-board_add_comment saying
+what you actually did: files touched, decisions taken and why, what is still open, and the first
+thing worth doing next session. Short, factual, written for whoever picks this up next, possibly
+you with no context.""",
+    },
+    {
+        "name": "Unblock this",
+        "column": "",
+        "blurb": "say what it waits on, split off what could start today",
+        "template": """Card {id} ("{title}") on the {board} board is stuck:
+
+{description}
+
+Say plainly what it waits on, and split off the part of it that could be started today as a card of
+its own. Mark this card blocked with project-board_edit_card if it truly cannot move, and suggest
+which card on the board is the best one to do instead right now.""",
+    },
+    {
+        "name": "Summarise this column",
+        "column": "",
+        "blurb": "a status read-out of the column, with nothing changed",
+        "template": """Give me a status read-out of the {column} column on the {board} board, with card {id}
+("{title}") as the one you were asked about. Read the board, group the cards, and say what is
+moving, what is stalled and what looks risky. Change nothing.""",
+    },
+    {
+        "name": "Sync the board",
+        "column": "",
+        "blurb": "compare board against repository reality and propose moves",
+        "template": """Compare the {board} board against what the repository actually looks like, starting from card
+{id} ("{title}").
+
+Find work that is finished but not marked done, cards describing work nobody is doing, and missing
+steps for work in progress. Propose the moves and the new cards as a list first - do not touch the
+board until I agree.""",
+    },
+    {
+        "name": "Import OpenSpec stories",
+        "column": "",
+        "blurb": "re-read the change this card came from and land what is missing",
+        "template": """Card {id} ("{title}") came from the OpenSpec change {change}. Re-read
+openspec/changes/{change}/ and land whatever is not on the {board} board yet with
+project-board_import_openspec, so the cards come from the files rather than from your memory of
+them. Then tell me which requirements have no scenario, since those are not testable yet. Do not
+implement anything.""",
+    },
+    {
+        "name": "Check off OpenSpec tasks",
+        "column": "",
+        "blurb": "tick the boxes you really finished, then let the board follow the file",
+        "template": """Card {id} ("{title}") came from the OpenSpec change {change}. Tick the boxes in
+openspec/changes/{change}/tasks.md for the tasks you actually completed - and only those - and
+leave the file's numbering and wording otherwise alone. If what you did matches no task, add the
+task you really did. Then run project-board_import_openspec again so the board follows the file.""",
+    },
+    {
+        "name": "Archive this change",
+        "column": "",
+        "blurb": "merge the specs and archive the folder once its cards are done",
+        "template": """Card {id} ("{title}") came from the OpenSpec change {change}. Once every card from it sits on a
+done column of the {board} board, archive the change the way this project does it: delta specs
+merged into the main specs, the change folder moved under openspec/changes/archive with its date.
+Check nothing from it is left open first, and tell me what you merged.""",
+    },
+]
+
+# the prompt the process-spec button fills into the chat. deliberately OpenSpec shaped: the
+# stories your board ends up with come out of reviewed files rather than out of the middle of
+# a chat turn. it is a setting, so rewrite it however your project plans.
+DEFAULT_SPEC_PROMPT = """Turn the spec below into an OpenSpec change, then land its stories on the '{board}' board.
+
+1. If the project has an openspec/ folder, follow it. If the openspec CLI is available, use it
+   (openspec new change, or the opsx skills); otherwise write the same artifacts by hand under
+   openspec/changes/<change-id>/: proposal.md, one specs/<capability>/spec.md per capability
+   using '### Requirement:' with at least one '#### Scenario:' (- WHEN / - THEN) each, design.md
+   when the approach is not obvious, and tasks.md as a numbered checklist where every item says
+   how it gets verified.
+2. Check your own work before landing anything: every requirement has a scenario, every scenario
+   has a WHEN and a THEN, and every task is finishable in one sitting.
+3. Land the stories with project-board_import_openspec so the cards come from the files rather
+   than from your memory of them. They go into '{backlog}' and nowhere else. Do not start
+   implementing, and do not put the spec itself on the board - only the stories.
+4. Tell me the change id, how many cards you added, and which requirements you were unsure about.
+
+Spec: {title}
+
+{spec}
+"""
+
+# ----------------------------------------------------------------------
+# openspec: reading openspec/changes/<change>/ and turning it into cards
+# ----------------------------------------------------------------------
+
+# cards that came out of a change carry this label ("openspec/add-dark-mode") so a whole
+# batch is filterable in the panel, and a hidden "source" field so re-importing updates
+# them instead of duplicating them
+OPENSPEC_LABEL = "openspec"
+OPENSPEC_UNITS = ("requirements", "tasks", "both")
+OPENSPEC_ARCHIVE = "archive"
+
+# the shapes OpenSpec actually writes. plain markdown on purpose, so a change stays
+# readable when nobody has the CLI installed - and so we can read it without the CLI.
+TASK_BOX_RE = re.compile(r"^\s*[-*+]\s*\[(?P<mark>.)\]\s*(?P<body>.*?)\s*$")
+TASK_NUMBER_RE = re.compile(r"^(?P<number>\d+(?:\.\d+)*)[.)]?\s+(?P<title>\S.*)$")
+HEADING_RE = re.compile(r"^#{1,4}\s*(?P<name>.+?)\s*$")
+DELTA_KIND_RE = re.compile(r"^#{1,4}\s*(?P<kind>added|modified|removed|renamed)\s+requirements?\s*$",
+                           re.IGNORECASE)
+REQUIREMENT_RE = re.compile(r"^#{1,5}\s*Requirement:\s*(?P<name>.+?)\s*$", re.IGNORECASE)
+SCENARIO_RE = re.compile(r"^#{1,6}\s*Scenario[s]?\s*:\s*(?P<name>.+?)\s*$", re.IGNORECASE)
 
 
 def _now():
@@ -67,8 +320,216 @@ def _is_overdue(card):
         return False
 
 
+def _requirement_markdown(change, requirement):
+    """a card description out of one requirement: the SHALL sentence, then its scenarios as
+    acceptance criteria. that second part is the whole reason to read the specs rather than the
+    task list - a story you cannot check off against a scenario is just a todo item"""
+    capability = requirement.get("capability") or ""
+
+    lines = [f"Requirement: {requirement['name']}"]
+
+    if requirement.get("text"):
+        lines.append("")
+        lines.append(requirement["text"])
+
+    lines.append("")
+    lines.append("Acceptance criteria, from "
+                 f"openspec/changes/{change['id']}/specs/{capability or '?'}/spec.md:")
+
+    if requirement.get("scenarios"):
+        for scenario in requirement["scenarios"]:
+            lines.append(f"- Scenario: {scenario['name']}")
+            if scenario["lines"]:
+                lines.extend(f"  - {entry}" for entry in scenario["lines"])
+            else:
+                lines.append("  - (no GIVEN/WHEN/THEN written)")
+    else:
+        lines.append("- this requirement has no scenario, so nothing about it is verifiable yet")
+
+    lines.append("")
+    lines.append(f"OpenSpec change: {change['id']} ({requirement.get('kind', 'added')}"
+                 + (f", capability: {capability}" if capability else "") + ")")
+
+    return "\n".join(lines)
+
+
+def _openspec_change_of(card):
+    """the openspec change id a card came from, "" when it did not come from one.
+
+    read from the import source first (that one is authoritative) and from an
+    "openspec/<change>" label after that, so a card filed by hand with the label on it
+    behaves the same as an imported one"""
+    source = str(card.get("source") or "")
+    if source.startswith("openspec:"):
+        head = source[len("openspec:"):].split("#", 1)[0].strip()
+        if head:
+            return head
+
+    for label in card.get("labels") or []:
+        text = str(label)
+        if text.startswith(OPENSPEC_LABEL + "/"):
+            return text[len(OPENSPEC_LABEL + "/"):].strip()
+
+    return ""
+
+
+def _render(text, values):
+    """{placeholder} replacement for prompt templates. plain replacement rather than
+    str.format(**..): unknown {things} stay as their author wrote them, prose with braces in
+    it survives, and no template can reach into a python object through it"""
+    output = str(text or "")
+
+    # longest key first, so a {title} inside a hypothetical {title_part} cannot be eaten by it
+    for key in sorted(values, key=len, reverse=True):
+        output = output.replace("{" + key + "}", str(values[key]))
+
+    return output
+
+
+def _labelify(text, limit=28):
+    """a short label out of prose: lowercase, dashes instead of spaces, group numbering gone"""
+    cleaned = re.sub(r"[^a-z0-9]+", "-", str(text or "").lower()).strip("-")
+    cleaned = re.sub(r"^\d+-", "", cleaned)
+
+    return cleaned[:limit].strip("-")
+
+
+def _parse_openspec_tasks(text):
+    """tasks.md -> [{number, group, title, done}].
+
+    OpenSpec writes one checkbox per task, numbered hierarchically under `## 1. Group`
+    headings, and checks a box off as the work lands:
+
+        ## 1. Theme Infrastructure
+        - [ ] 1.1 Create ThemeContext with light/dark state
+        - [x] 1.2 Add CSS custom properties for colors
+
+    Anything that is not a checkbox is prose and gets left alone.
+    """
+    tasks = []
+    group = ""
+
+    for line in str(text or "").splitlines():
+        heading = HEADING_RE.match(line.strip())
+        if heading:
+            group = heading.group("name").strip()
+            continue
+
+        box = TASK_BOX_RE.match(line)
+        if not box:
+            continue
+
+        body = box.group("body").strip()
+        numbered = TASK_NUMBER_RE.match(body)
+
+        tasks.append({
+            "number": numbered.group("number") if numbered else "",
+            "group": group,
+            "title": (numbered.group("title") if numbered else body).strip(),
+            # "[x]" and "[X]" mean done, "[!]" is what a few projects write for partial work -
+            # still unfinished, so only x counts
+            "done": box.group("mark").lower() == "x",
+        })
+
+    return tasks
+
+
+def _parse_openspec_spec(text, capability=""):
+    """a delta spec -> requirement dicts with their scenarios attached.
+
+        ## ADDED Requirements
+        ### Requirement: Two-Factor Authentication
+        The system MUST support TOTP-based two-factor authentication.
+
+        #### Scenario: 2FA login
+        - GIVEN a user with 2FA enabled
+        - WHEN the user submits valid credentials
+        - THEN an OTP challenge is presented
+
+    The scenarios are the point: they are the acceptance criteria a card gets, which is what
+    makes an imported story testable instead of a vibe.
+    """
+    requirements = []
+    kind = ""
+    requirement = None
+    scenario = None
+
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+
+        delta = DELTA_KIND_RE.match(line)
+        if delta:
+            kind = delta.group("kind").lower()
+            requirement, scenario = None, None
+            continue
+
+        scenario_match = SCENARIO_RE.match(line)
+        if scenario_match and requirement is not None:
+            scenario = {"name": scenario_match.group("name").strip(), "lines": []}
+            requirement["scenarios"].append(scenario)
+            continue
+
+        requirement_match = REQUIREMENT_RE.match(line)
+        if requirement_match:
+            requirement = {
+                "name": requirement_match.group("name").strip(),
+                "text": "",
+                "kind": kind or "added",
+                "capability": capability,
+                "scenarios": [],
+            }
+            requirements.append(requirement)
+            scenario = None
+            continue
+
+        # a heading we do not model ("# Delta for Auth", "## Purpose", ..)
+        if line.startswith("#"):
+            continue
+
+        body = line[1:].strip() if line.startswith("-") else line
+
+        if scenario is not None:
+            scenario["lines"].append(body)
+        elif requirement is not None:
+            requirement["text"] = f"{requirement['text']} {body}".strip()
+
+    return requirements
+
+
+def _parse_openspec_proposal(text, limit=14):
+    """proposal.md -> the part worth putting on an epic card: intent, scope, approach"""
+    blocks = []
+    current = None
+
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+
+        heading = HEADING_RE.match(line)
+        if heading:
+            name = heading.group("name").lower()
+            wanted = ("intent", "scope", "approach", "why", "what")
+            current = {"name": name, "lines": []} if name.startswith(wanted) else None
+            if current is not None:
+                blocks.append(current)
+            continue
+
+        if current is not None and len(current["lines"]) < limit:
+            current["lines"].append(line)
+
+    if blocks:
+        return "\n\n".join(f"{block['name'].title()}\n" + "\n".join(block["lines"]) for block in blocks)
+
+    # a proposal that does not follow the template is still worth showing, truncated
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip() and not line.startswith("#")]
+    return "\n".join(lines[:limit])
+
+
 class ProjectBoard(core.module.Module):
-    """Gives you kanban / scrum project boards, one per project: you drag the cards around in the WebUI, your AI runs the same board with tools."""
+    """Gives you kanban / scrum project boards, one per project: you drag the cards around in the WebUI, your AI runs the same board with tools. Your play buttons are prompt templates you wrote yourself, and if the project uses OpenSpec the board can turn a change's requirements into testable stories."""
 
     category = "life"
 
@@ -95,6 +556,33 @@ class ProjectBoard(core.module.Module):
             "default": True,
             "depends": "enable_webui_extension"
         },
+        "enable_prompt_actions": {
+            "description": "Prompt actions: prompt templates you write yourself, with {placeholders} for a card's fields in them, that the panel's play buttons drop into the chat input. Your AI can set the actions up, but pressing play stays your gesture. Turn this off to hide the play buttons and the action editor.",
+            "default": True
+        },
+        "spec_action_prompt": {
+            "description": "The prompt the panel's 'process spec' button fills into the chat, with the spec you pasted in it. Placeholders: {title}, {spec}, {board}, {backlog}, {date}. The default sends your AI off to turn the spec into an OpenSpec change and import its stories into the backlog - rewrite it if your project plans differently.",
+            "default": DEFAULT_SPEC_PROMPT
+        },
+        "enable_openspec": {
+            "description": "OpenSpec support: read openspec/changes/<change>/ and turn its requirements (each scenario becoming acceptance criteria) or its tasks.md checklist into board cards. Strictly read-only - the board never writes into your project and the openspec CLI is never run.",
+            "default": True
+        },
+        "openspec_roots": {
+            "description": "Folders your OpenSpec projects live in, so import_openspec knows where to look. Point them at the repository root that contains openspec/, or straight at the openspec folder, or at a sandbox the coder module already works in - the way coder's sandbox_paths has it. Nothing is read from anywhere outside this list.",
+            "default": [],
+            "depends": "enable_openspec"
+        },
+        "openspec_default_unit": {
+            "description": "What one card stands for when a change is imported: 'requirements' makes one story per requirement with its scenarios as acceptance criteria (the testable unit), 'tasks' mirrors tasks.md with one checkbox per card, 'both' does the stories plus the task checklist.",
+            "default": "requirements",
+            "depends": "enable_openspec"
+        },
+        "openspec_max_cards": {
+            "description": "How many cards one import may create in one go, so a monster spec cannot flood the backlog. Cards that are already on the board get their text refreshed regardless.",
+            "default": 60,
+            "depends": "enable_openspec"
+        },
     }
 
     async def on_ready(self):
@@ -106,6 +594,7 @@ class ProjectBoard(core.module.Module):
         self.boards = core.storage.StorageList("project_board_boards", "json")
         self.card_store = core.storage.StorageList("project_board_cards", "json")
         self.column_store = core.storage.StorageList("project_board_columns", "json")
+        self.actions = core.storage.StorageList("project_board_actions", "json")
 
         self.board = None
 
@@ -240,6 +729,7 @@ class ProjectBoard(core.module.Module):
         self.card_store.save()
         self.column_store.save()
         self.boards.save()
+        self.actions.save()
 
     def _drop_card(self, index):
         """removes the card at an index of the active board's listing from storage"""
@@ -256,6 +746,7 @@ class ProjectBoard(core.module.Module):
         self.boards.load()
         self.card_store.load()
         self.column_store.load()
+        self.actions.load()
 
         if not len(self.boards):
             self._new_board(self._default_board_name())
@@ -316,6 +807,38 @@ class ProjectBoard(core.module.Module):
                 changed = True
         self.board = restore
 
+        if self._heal_actions():
+            changed = True
+
+        return changed
+
+    def _heal_actions(self):
+        """prompt actions that point at a board or a column that is gone. a board is adopted
+        the way every other item's is; a column reference that no longer exists is dropped,
+        which leaves the action doing what it still can: working board-wide"""
+        if not len(self.boards):
+            return False
+
+        changed = False
+        known = {board["id"] for board in self.boards}
+
+        for action in self.actions:
+            if action.get("board") not in known:
+                action["board"] = self.boards[0]["id"]
+                changed = True
+
+        for board in self.boards:
+            columns = {column["id"] for column in self._columns_of(board)}
+
+            for action in self._actions_of(board):
+                for key in ("column", "move_to"):
+                    if action.get(key) and action[key] not in columns:
+                        action[key] = ""
+                        changed = True
+
+        if changed:
+            self.log(self.name, "repaired prompt action(s) pointing at a board or column that is gone")
+
         return changed
 
     def _adopt_orphans(self):
@@ -365,7 +888,7 @@ class ProjectBoard(core.module.Module):
                 return candidate
 
     def _new_card(self, title, column_id, description="", card_type="task", priority="medium",
-                  assignee="", labels=None, points=0, due="", order=0):
+                  assignee="", labels=None, points=0, due="", order=0, source=""):
         return {
             "id": self._new_id(self.card_store),
             "title": str(title).strip(),
@@ -380,6 +903,10 @@ class ProjectBoard(core.module.Module):
             "points": max(0, int(points or 0)),
             "due": str(due or "").strip(),
             "blocked": False,
+            # what this card was imported from, e.g. "openspec:add-dark-mode#req:ui:theme-selection".
+            # hidden from the listings - it is how re-importing updates a card instead of
+            # adding a second one, not information you read
+            "source": str(source or ""),
             "comments": [],
             "created": _now(),
             "updated": _now(),
@@ -398,6 +925,92 @@ class ProjectBoard(core.module.Module):
             if label and label not in cleaned:
                 cleaned.append(label)
         return cleaned
+
+    # ------------------------------------------------------------------
+    # prompt actions: templates you wrote, played from the panel
+    # ------------------------------------------------------------------
+
+    def _actions_of(self, board):
+        """the prompt actions of one board, in the order the panel shows them. actions belong
+        to a board the way cards do, so two projects can want completely different buttons"""
+        if not board:
+            return []
+
+        owned = [action for action in self.actions if action.get("board") == board["id"]]
+        return sorted(owned, key=lambda action: (int(action.get("order") or 0),
+                                                 str(action.get("created") or "")))
+
+    def _action(self, ref):
+        """prompt action reference -> (index, problem), inside the active board's actions"""
+        return self._lookup(self._actions_of(self.board), ref, "name")
+
+    def _new_action(self, name, template, board_id, column="", move_to="",
+                    log_as_comment=False, order=0):
+        return {
+            "id": self._new_id(self.actions),
+            "board": board_id,
+            "name": str(name).strip(),
+            # the template is yours. the module only substitutes the card's fields into it,
+            # so it stays plain text you can read, diff and rewrite
+            "template": str(template or ""),
+            # "" means the whole board; a column id means the button only shows up on cards in
+            # that stage, which is how play can mean something different in review than in the
+            # backlog
+            "column": str(column or "").strip(),
+            "move_to": str(move_to or "").strip(),
+            "log_as_comment": bool(log_as_comment),
+            "order": int(order or 0),
+            "created": _now(),
+            "updated": _now(),
+        }
+
+    def _drop_actions_of(self, board_id):
+        """a board's prompt actions go with the board"""
+        self.actions[:] = [action for action in self.actions if action.get("board") != board_id]
+
+    def _card_values(self, card):
+        """what {placeholders} in a template can reach for on this card"""
+        column = next((entry for entry in self.columns if entry["id"] == card.get("column")), None)
+        comments = card.get("comments") or []
+
+        return {
+            "id": card["id"],
+            "title": card.get("title", ""),
+            "description": card.get("description", ""),
+            "column": column["name"] if column else "",
+            "board": self.board["name"] if self.board else "",
+            "type": card.get("type", ""),
+            "priority": card.get("priority", ""),
+            "assignee": card.get("assignee", ""),
+            "labels": " ".join(f"#{label}" for label in card.get("labels") or []),
+            "points": str(card.get("points") or ""),
+            "due": card.get("due", ""),
+            "comments": "\n".join(f"- {comment.get('author', 'ai')}: {comment.get('text', '')}"
+                                  for comment in comments),
+            "change": _openspec_change_of(card),
+            "date": _today().isoformat(),
+        }
+
+    def _backlog_column(self):
+        """where imported work waits, named {backlog} in templates: the first column that is
+        not a done column, which is the same place a new card lands by default"""
+        index = self._default_column_index()
+
+        return self.columns[index]["name"] if 0 <= index < len(self.columns) else ""
+
+    def _ui_actions(self):
+        """prompt actions as the panel needs them. the panel decides per card whether an action
+        applies (no column means the whole board), so it gets the references plus their names"""
+        names = {column["id"]: column["name"] for column in self.columns}
+
+        actions = []
+        for action in self._actions_of(self.board):
+            entry = dict(action)
+            entry["column_name"] = names.get(action.get("column") or "", "")
+            entry["move_to_name"] = names.get(action.get("move_to") or "", "")
+            actions.append(entry)
+
+        return actions
 
     def _lookup(self, items, ref, name_key="name"):
         """
@@ -583,6 +1196,10 @@ class ProjectBoard(core.module.Module):
                        ". Cards never move between boards on their own; switch with activate_board "
                        "when the user means another project.")
 
+        notes = self._prompt_notes()
+        if notes:
+            header += " " + " ".join(notes)
+
         if not len(self.cards):
             return header + "\nThe board is empty."
 
@@ -592,6 +1209,31 @@ class ProjectBoard(core.module.Module):
             output.append(f".. and {skipped} more open cards, use read_board to see them all.")
 
         return "\n".join(output)
+
+    def _prompt_notes(self):
+        """lines that go after the board header in the system prompt: what the user's play
+        buttons are, and whether the cards here came from an openspec change. Kept short, since
+        they ride along in every session"""
+        notes = []
+
+        if self.config.get("enable_prompt_actions", True):
+            actions = self._actions_of(self.board)
+            if actions:
+                notes.append(
+                    f"{len(actions)} prompt action(s) the user wrote sit on this board "
+                    "(" + ", ".join(action["name"] for action in actions) + "). Pressing play only "
+                    "fills their chat input, so when they say they played a card they are about to "
+                    "ask you to do what that template says - list_prompt_actions shows them.")
+
+        if self.config.get("enable_openspec", True) and self._openspec_roots():
+            changes = sorted({_openspec_change_of(card) for card in self.cards} - {""})
+            if changes:
+                notes.append(
+                    "Some cards here came from openspec changes ("
+                    + ", ".join(sorted(changes)) + "). Those files are the truth about those "
+                    "requirements, so import_openspec refreshes the cards instead of you retyping them.")
+
+        return notes
 
     # ------------------------------------------------------------------
     # shared mutations
@@ -904,6 +1546,7 @@ class ProjectBoard(core.module.Module):
         was_active = bool(entry.get("active"))
 
         self._drop_cards(cards)
+        self._drop_actions_of(entry["id"])
         for column in columns:
             self.column_store.remove(column)
         self.boards.remove(entry)
@@ -1155,6 +1798,143 @@ class ProjectBoard(core.module.Module):
         result = f"added card {card['id']} to {target['name']}: {card['title']}"
         note = self._wip_note(target)
         return self.result(f"{result}\n{note}" if note else result)
+
+    @core.module.tool
+    async def add_cards(self, cards: list, column: str = None, card_type: str = None,
+                        priority: str = None, assignee: str = None, labels: list = None,
+                        points: int = 0, due: str = None, to_top: bool = False):
+        """Adds a whole batch of cards in one call, which is what you want when you break a spec or
+        a project down: one write, one push to the panel, and a per-item report of what landed. For
+        an OpenSpec change prefer import_openspec, which reads the stories out of the files instead
+        of out of your memory of them.
+
+        Args:
+            cards: array of card objects. each one takes the same fields as add_card: "title"
+                (required) plus any of "description", "type", "priority", "assignee", "labels",
+                "points", "due" (YYYY-MM-DD), "blocked" and "column" (name or id, which overrides
+                where the batch lands). They are appended in the order you list them
+            column: where the batch lands when an item does not say. Defaults to the first column
+                that is not done
+            card_type: type for the items that do not name one (epic, story, task, bug, chore)
+            priority: priority for the items that do not name one (critical, high, medium, low)
+            assignee: assignee for the items that do not name one
+            labels: labels for every card in the batch, on top of the ones an item carries
+            points: points for the items that do not name one
+            due: due date for the items that do not name one (YYYY-MM-DD)
+            to_top: put the batch at the top of its column instead of at the bottom, keeping the
+                order you listed it in
+        """
+        self._reload()
+
+        if not len(self.columns):
+            return self.result("the board has no columns, create one with add_column first", success=False)
+
+        if not isinstance(cards, (list, tuple)) or not len(cards):
+            return self.result("give me a list of card objects to add", success=False)
+
+        if column:
+            column_index, problem = self._column(column)
+            if column_index < 0:
+                return self.result(self._not_found("column", column, problem), success=False)
+            default_column = self.columns[column_index]
+        else:
+            index = self._default_column_index()
+            if index < 0:
+                return self.result("the board has no columns, create one with add_column first", success=False)
+            default_column = self.columns[index]
+
+        default_type = _slug(card_type) or "task"
+        default_priority = _slug(priority) or "medium"
+        if default_type not in CARD_TYPES:
+            return self.result(f"unknown card type '{default_type}', use one of: {', '.join(CARD_TYPES)}", success=False)
+        if default_priority not in PRIORITIES:
+            return self.result(f"unknown priority '{default_priority}', use one of: {', '.join(PRIORITIES)}", success=False)
+
+        batch_labels = self._clean_labels(labels)
+        added = []
+        problems = []
+
+        for position, item in enumerate(cards):
+            if not isinstance(item, dict):
+                problems.append(f"item {position + 1}: expected an object with a title, got {item}")
+                continue
+
+            title = str(item.get("title") or "").strip()
+            if not title:
+                problems.append(f"item {position + 1}: no title")
+                continue
+
+            target = default_column
+            if item.get("column"):
+                column_index, problem = self._column(item["column"])
+                if column_index < 0:
+                    problems.append(f"{title}: {self._not_found('column', item['column'], problem)}")
+                    continue
+                target = self.columns[column_index]
+
+            item_type = _slug(item.get("type")) or default_type
+            if item_type not in CARD_TYPES:
+                problems.append(f"{title}: unknown card type '{item_type}'")
+                continue
+
+            item_priority = _slug(item.get("priority")) or default_priority
+            if item_priority not in PRIORITIES:
+                problems.append(f"{title}: unknown priority '{item_priority}'")
+                continue
+
+            due = str(item.get("due") or due or "").strip()
+            if due:
+                try:
+                    due = datetime.date.fromisoformat(due).isoformat()
+                except ValueError:
+                    problems.append(f"{title}: the due date must look like 2026-12-31, got '{due}'")
+                    continue
+
+            card = self._new_card(
+                title=title,
+                column_id=target["id"],
+                description=str(item.get("description") or ""),
+                card_type=item_type,
+                priority=item_priority,
+                assignee=str(item.get("assignee") or assignee or ""),
+                labels=batch_labels + (item.get("labels") or []),
+                points=int(item.get("points") or points or 0),
+                due=due,
+            )
+            card["blocked"] = bool(item.get("blocked"))
+
+            # to_top keeps the order the batch was listed in: each card lands below the ones
+            # already placed rather than always at position 0
+            self._place(card, target["id"], index=position if to_top else None)
+            self.card_store.append(card)
+            added.append((card, target))
+
+        if not added:
+            return self.result("none of those cards could be added:\n" + "\n".join(problems), success=False)
+
+        # one write and one push for the whole batch, so the panel does not flicker per card
+        self._save()
+        self.broadcast_board("cards_added")
+
+        lines = [f"added {len(added)} card(s):"]
+        for card, target in added:
+            lines.append(f"  [{card['id']}] {target['name']} - {card['title']}")
+
+        if problems:
+            lines.append(f"{len(problems)} item(s) were skipped:")
+            lines.extend(f"  - {problem}" for problem in problems)
+
+        # one wip note per column the batch touched, not one per card
+        touched = {}
+        for _card, target in added:
+            touched[target["id"]] = target
+
+        for target in touched.values():
+            note = self._wip_note(target)
+            if note:
+                lines.append(note)
+
+        return self.result("\n".join(lines))
 
     @core.module.tool
     async def edit_card(self, card: str, title: str = None, description: str = None,
@@ -1599,6 +2379,14 @@ class ProjectBoard(core.module.Module):
         self.column_store.remove(entry)
         self._set_column_layout(self.columns)
 
+        # prompt actions scoped to a column that is gone would otherwise keep promising a
+        # button that never appears, so they go back to working board-wide
+        for action in self._actions_of(self.board):
+            if action.get("column") == entry["id"]:
+                action["column"] = ""
+            if action.get("move_to") == entry["id"]:
+                action["move_to"] = ""
+
         self._save()
         self.broadcast_board("column_deleted")
 
@@ -1608,6 +2396,797 @@ class ProjectBoard(core.module.Module):
             return self.result(f"deleted column {entry['name']} and its {len(inside)} cards")
 
         return self.result(f"deleted column {entry['name']}, moved {len(inside)} cards to {target['name']}")
+
+    # ------------------------------------------------------------------
+    # tools: prompt actions (templates you wrote, buttons you press)
+    # ------------------------------------------------------------------
+
+    @core.module.tool
+    async def list_prompt_action_examples(self):
+        """Lists the prompt templates the module ships as starting points for the board's play
+        buttons. They are only examples: nothing is created by looking at them, and the user can
+        pick one in the panel's action editor and edit it into whatever they want.
+
+        Returns:
+            one entry per example: name, the column it suits, a one line blurb
+        """
+        lines = [f"{len(ACTION_EXAMPLES)} prompt action templates the module ships as a starting point:"]
+
+        for example in ACTION_EXAMPLES:
+            lines.append(f"  {example['name']} - suits: "
+                         f"{example['column'] or 'any card on the board'} - {example['blurb']}")
+
+        lines.append("")
+        lines.append("ask the user to pick one in the panel's action editor (board settings -> prompt"
+                      " actions), or offer to write one from scratch with add_prompt_action.")
+        lines.append("placeholders a template can use: " + " ".join(f"{{{key}}}" for key in CARD_PLACEHOLDERS))
+
+        return self.result("\n".join(lines))
+
+    @core.module.tool
+    async def list_prompt_actions(self):
+        """Lists the play buttons the active board has: the prompt templates the user wrote, which
+        cards they show up on, and what they do besides filling the chat input. Useful to know what
+        a "I pressed play on that card" from the user is actually about to ask you to do.
+
+        Returns:
+            one line per action: id, name, scope, side effects, and the template itself
+        """
+        self._reload()
+
+        actions = self._actions_of(self.board)
+        board_name = self.board["name"] if self.board else "?"
+
+        if not actions:
+            return self.result(f"the '{board_name}' board has no prompt actions yet, so nothing has a "
+                               "play button on it. list_prompt_action_examples shows the templates the "
+                               "module ships as a starting point, and the user can also set them up in "
+                               "the panel's action editor")
+
+        names = {column["id"]: column["name"] for column in self.columns}
+        lines = [f"prompt actions on the '{board_name}' board "
+                 "(the panel shows one play button per action that applies to a card):"]
+
+        for action in actions:
+            notes = ["every card" if not action.get("column") else names.get(action["column"], "a vanished column")]
+            if action.get("move_to"):
+                notes.append(f"moves the card to {names.get(action['move_to'], '?')}")
+            if action.get("log_as_comment"):
+                notes.append("logs the prompt on the card")
+
+            lines.append(f"  [{action['id']}] {action['name']} - {'; '.join(notes)}")
+            lines.append("        " + str(action.get("template", "")).replace("\n", "\n        "))
+
+        lines.append("")
+        lines.append("pressing play only fills the chat input - the user still sends it.")
+
+        return self.result("\n".join(lines))
+
+    @core.module.tool
+    async def add_prompt_action(self, name: str, template: str, column: str = None,
+                                move_to: str = None, log_as_comment: bool = False):
+        """Adds one play button to the active board: a prompt template you write, which the panel
+        fills with the card's fields and drops into the chat input when the user presses it. Do not
+        invent what a button should say - ask the user, or start from list_prompt_action_examples.
+
+        Args:
+            name: what the button says, e.g. "Implement this task"
+            template: the prompt, written for you to act on, with {placeholders} for the card's
+                fields in it: {id} {title} {description} {column} {board} {type} {priority}
+                {assignee} {labels} {points} {due} {comments} {change} {date}. Braces around
+                anything else are left exactly as written, so json and code survive
+            column: only offer this button on cards in this column (name or id). Leave it out to
+                offer it on every card of the board. list_prompt_action_examples suggests one per
+                example, but only the user's own columns exist, so treat it as a suggestion
+            move_to: move the card to this column (name or id) when the button is pressed. Only
+                worth it for a button that means "this stage is done"
+            log_as_comment: also leave the rendered prompt on the card as a comment, so there is a
+                trail of what each press did
+        """
+        self._reload()
+
+        if not self.board:
+            return self.result("there is no active board to add an action to", success=False)
+
+        name = str(name or "").strip()
+        template = str(template or "")
+
+        if not name:
+            return self.result("a prompt action needs a name - it is what the button says", success=False)
+        if not template.strip():
+            return self.result("a prompt action needs a template - what the button fills into the chat",
+                               success=False)
+
+        if any(_slug(existing["name"]) == _slug(name) for existing in self._actions_of(self.board)):
+            return self.result(f"the board already has a prompt action called {name}", success=False)
+
+        column_id, problem = self._scoped_column(column)
+        if problem:
+            return self.result(problem, success=False)
+
+        move_id, problem = self._scoped_column(move_to, "move_to")
+        if problem:
+            return self.result(problem, success=False)
+
+        action = self._new_action(name, template, self.board["id"], column=column_id,
+                                  move_to=move_id, log_as_comment=bool(log_as_comment),
+                                  order=len(self._actions_of(self.board)))
+        self.actions.append(action)
+        self._save()
+        self.broadcast_board("actions_changed")
+
+        names = {column["id"]: column["name"] for column in self.columns}
+        scope = "every card" if not column_id else f"cards in {names.get(column_id, '?')}"
+        result = f"added prompt action {action['id']} ({action['name']}) for {scope}"
+
+        preview = self._action_preview(action)
+        if preview:
+            result += f"\n\nit renders to:\n{preview}"
+
+        return self.result(result)
+
+    @core.module.tool
+    async def edit_prompt_action(self, action: str, name: str = None, template: str = None,
+                                 column: str = None, move_to: str = None, log_as_comment: bool = None,
+                                 order: int = None):
+        """Edits one of the board's play buttons. Only what you pass is changed.
+
+        Args:
+            action: the action's id, or its name (an unambiguous part of the name works too)
+            name: what the button says
+            template: the prompt, with {placeholders} for the card's fields in it
+            column: restrict the button to this column (name or id), "" for the whole board
+            move_to: move the card here when pressed (name or id), "" for no move
+            log_as_comment: leave the rendered prompt on the card as a comment
+            order: swap places with the action sitting at this zero-based position, which is how
+                you put the button the user presses most in front
+        """
+        self._reload()
+
+        index, problem = self._action(action)
+        if index < 0:
+            return self.result(self._not_found("prompt action", action, problem), success=False)
+
+        actions = self._actions_of(self.board)
+        entry = actions[index]
+        changed = []
+
+        if name is not None and str(name).strip():
+            new_name = str(name).strip()
+            if any(other["id"] != entry["id"] and _slug(other["name"]) == _slug(new_name) for other in actions):
+                return self.result(f"the board already has a prompt action called {new_name}", success=False)
+            entry["name"] = new_name
+            changed.append(f"name -> {new_name}")
+
+        if template is not None:
+            if not str(template).strip():
+                return self.result("a prompt action cannot have an empty template", success=False)
+            entry["template"] = str(template)
+            changed.append("template")
+
+        if column is not None:
+            column_id, problem = self._scoped_column(column)
+            if problem:
+                return self.result(problem, success=False)
+            entry["column"] = column_id
+            changed.append(f"scope -> {column_id or 'whole board'}")
+
+        if move_to is not None:
+            move_id, problem = self._scoped_column(move_to, "move_to")
+            if problem:
+                return self.result(problem, success=False)
+            entry["move_to"] = move_id
+            changed.append(f"moves to -> {move_id or 'nowhere'}")
+
+        if log_as_comment is not None:
+            entry["log_as_comment"] = bool(log_as_comment)
+            changed.append(f"logs the prompt -> {entry['log_as_comment']}")
+
+        if order is not None:
+            target = max(0, min(int(order), len(actions) - 1))
+            other = actions[target]
+
+            entry["order"], other["order"] = other["order"], entry["order"]
+            changed.append(f"position -> {target + 1}")
+
+        if not changed:
+            return self.result("nothing to change", success=False)
+
+        entry["updated"] = _now()
+        self._save()
+        self.broadcast_board("actions_changed")
+
+        return self.result(f"updated prompt action {entry['name']}: " + ", ".join(changed))
+
+    @core.module.tool
+    async def delete_prompt_action(self, action: str):
+        """Removes one of the board's play buttons. The cards are untouched.
+
+        Args:
+            action: the action's id, or its name (an unambiguous part of the name works too)
+        """
+        self._reload()
+
+        index, problem = self._action(action)
+        if index < 0:
+            return self.result(self._not_found("prompt action", action, problem), success=False)
+
+        entry = self._actions_of(self.board)[index]
+        self.actions[:] = [other for other in self.actions if other["id"] != entry["id"]]
+
+        self._save()
+        self.broadcast_board("actions_changed")
+
+        return self.result(f"deleted prompt action {entry['name']}")
+
+    def _scoped_column(self, ref, argument="column"):
+        """a prompt action's column reference -> (column id, problem). "" and None mean "the
+        whole board", which is a real answer here rather than a missing argument"""
+        if ref is None or not str(ref).strip():
+            return "", ""
+
+        index, problem = self._column(ref)
+        if index < 0:
+            return "", self._not_found("column", ref, problem)
+
+        return self.columns[index]["id"], ""
+
+    def _action_preview(self, action):
+        """what an action's template turns into on the first card it would apply to, so a
+        template can be judged by what it actually says rather than by its placeholders"""
+        cards = self._column_cards(action["column"]) if action.get("column") else self.cards
+
+        for card in cards:
+            return _render(action.get("template", ""), self._card_values(card))
+
+        return ""
+
+    async def _play_action(self, action_ref, card_ref):
+        """what the panel's play button does: render the template for the card, then apply the
+        side effects the action was configured with. filling the chat input is the browser's job -
+        a tool call never starts a turn, and neither does a button here"""
+        self._reload()
+
+        index, problem = self._card(card_ref)
+        if index < 0:
+            return self.result(self._not_found("card", card_ref, problem), success=False)
+        card = self.cards[index]
+
+        action_index, problem = self._action(action_ref)
+        if action_index < 0:
+            return self.result(self._not_found("prompt action", action_ref, problem), success=False)
+        action = self._actions_of(self.board)[action_index]
+
+        prompt = _render(action.get("template", ""), self._card_values(card))
+
+        return self.result({
+            "action": action["id"],
+            "name": action["name"],
+            "prompt": prompt,
+            "card": card["id"],
+            # the panel tells the user whether the prompt landed in the input or nowhere
+            "column": action.get("column") or "",
+            "move_to": action.get("move_to") or "",
+            "log_as_comment": bool(action.get("log_as_comment")),
+        })
+
+    async def _action_launched(self, action_ref, card_ref, prompt=None):
+        """the second half of a press: the side effects the action configures, recorded at the
+        moment the button was pressed rather than when the message eventually gets sent"""
+        self._reload()
+
+        index, problem = self._card(card_ref)
+        if index < 0:
+            return self.result(self._not_found("card", card_ref, problem), success=False)
+        card = self.cards[index]
+
+        action_index, problem = self._action(action_ref)
+        if action_index < 0:
+            return self.result(self._not_found("prompt action", action_ref, problem), success=False)
+        action = self._actions_of(self.board)[action_index]
+
+        done = []
+
+        if action.get("log_as_comment"):
+            text = str(prompt or _render(action.get("template", ""), self._card_values(card))).strip()
+            if text:
+                card.setdefault("comments", []).append({
+                    "id": str(ulid.ULID()),
+                    "author": f"action:{action['name']}",
+                    "text": text,
+                    "created": _now(),
+                })
+                card["updated"] = _now()
+                done.append("logged the prompt on the card")
+
+        if action.get("move_to"):
+            target = next((column for column in self.columns if column["id"] == action["move_to"]), None)
+            if target is not None and card.get("column") != target["id"]:
+                self._place(card, target["id"])
+                done.append(f"moved it to {target['name']}")
+            elif target is None:
+                done.append("its column is gone, so it did not move")
+
+        if done:
+            self._save()
+            self.broadcast_board("card_updated")
+
+        return self.result(f"{action['name']} on {card['id']}: " + ", ".join(done) if done
+                           else f"{action['name']} on {card['id']}: nothing else to do")
+
+    # ------------------------------------------------------------------
+    # tools: openspec (read a change folder, land its stories)
+    # ------------------------------------------------------------------
+    #
+    # the integration is with OpenSpec's files rather than with its CLI: openspec writes plain
+    # markdown (### Requirement:, #### Scenario: with - WHEN / - THEN, tasks.md checkboxes), so
+    # the board can read a change whether or not the CLI is installed. it never runs it, and it
+    # never writes to your project - ticking a box in tasks.md stays the job of whatever module
+    # you edit code with. only folders named in openspec_roots can be read at all.
+
+    def _openspec_ready(self):
+        """single gate for everything openspec, so a disabled module says so once, plainly"""
+        if not self.config.get("enable_openspec", True):
+            return "openspec support is turned off in the project-board settings"
+
+        return ""
+
+    def _openspec_roots(self):
+        """the folders the user allowed openspec reading from, as [(as configured, absolute)]"""
+        roots = []
+
+        for raw in self.config.get("openspec_roots") or []:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+
+            absolute = os.path.abspath(os.path.expanduser(text))
+            if not any(absolute == known for _shown, known in roots):
+                roots.append((text, absolute))
+
+        return roots
+
+    def _openspec_root(self, ref=None):
+        """root reference -> (as configured, absolute, problem). resolving against the settings
+        list instead of accepting a path is the point: the user decides once, in the settings,
+        which folders this module may read from, and nothing outside that list can be reached"""
+        roots = self._openspec_roots()
+
+        if not roots:
+            return "", "", ("no openspec folder is configured. set openspec_roots to the repository "
+                            "that contains openspec/ (or straight to an openspec folder) and try again")
+
+        if not ref:
+            for shown, absolute in roots:
+                if self._openspec_base(absolute):
+                    return shown, absolute, ""
+
+            return "", "", ("none of the configured openspec_roots hold an openspec/changes folder yet: "
+                            + ", ".join(shown for shown, _known in roots))
+
+        needle = _slug(ref)
+        for shown, absolute in roots:
+            if _slug(shown) == needle or _slug(absolute) == needle \
+                    or _slug(os.path.basename(absolute)) == needle \
+                    or _slug(os.path.basename(os.path.dirname(absolute))) == needle:
+                return shown, absolute, ""
+
+        return "", "", ("openspec_roots does not include anything matching "
+                             f"'{ref}'. it has: " + ", ".join(shown for shown, _known in roots))
+
+    def _openspec_base(self, absolute):
+        """the openspec folder of a configured root, or "" when the root is not an initialized
+        project - the `changes/` folder is what actually says an openspec project lives here"""
+        if not os.path.isdir(absolute):
+            return ""
+        if os.path.isdir(os.path.join(absolute, "openspec", "changes")):
+            return os.path.join(absolute, "openspec")
+        if os.path.isdir(os.path.join(absolute, "changes")):
+            return absolute
+
+        return ""
+
+    def _openspec_read(self, base, relative):
+        """one file inside a root, through the same sandboxed open the skills module uses.
+        None covers "not there", which keeps a missing optional artifact out of the way"""
+        try:
+            descriptor = core.sandbox_open(base, relative, os.O_RDONLY)
+        except (OSError, ValueError):
+            return None
+
+        try:
+            with os.fdopen(descriptor, "r", encoding="utf-8", errors="replace") as handle:
+                return handle.read()
+        except OSError:
+            return None
+
+    def _openspec_entries(self, base, relative=""):
+        """names of the entries of a folder inside a root, "" for the root itself"""
+        try:
+            return sorted(core.sandbox_listdir(base, relative))
+        except (OSError, ValueError):
+            return []
+
+    def _openspec_change_ids(self, base):
+        """the changes in flight. an archived change is finished work, not backlog, so the
+        archive folder is never read"""
+        return [entry for entry in self._openspec_entries(base, "changes")
+                if entry != OPENSPEC_ARCHIVE and not entry.startswith(".")]
+
+    def _openspec_change(self, base, change_id):
+        """one change folder, parsed: the proposal's intent, its requirements with their
+        scenarios, and the tasks.md checklist. design.md is left out on purpose - that is
+        implementation detail, and the board tracks what is to be done, not how"""
+        folder = f"changes/{change_id}"
+
+        proposal = self._openspec_read(base, f"{folder}/proposal.md")
+        tasks = self._openspec_read(base, f"{folder}/tasks.md")
+        metadata = self._openspec_read(base, f"{folder}/.openspec.yaml")
+
+        requirements = []
+        capabilities = []
+
+        for capability in self._openspec_entries(base, f"{folder}/specs"):
+            spec = self._openspec_read(base, f"{folder}/specs/{capability}/spec.md")
+            if spec is None:
+                continue
+
+            capabilities.append(capability)
+            requirements.extend(_parse_openspec_spec(spec, capability))
+
+        return {
+            "id": change_id,
+            "folder": f"openspec/{folder}",
+            "proposal": _parse_openspec_proposal(proposal) if proposal else "",
+            "tasks": _parse_openspec_tasks(tasks) if tasks else [],
+            "requirements": requirements,
+            "capabilities": capabilities,
+            "has_design": self._openspec_read(base, f"{folder}/design.md") is not None,
+            # a change with no spec deltas is legitimate for a pure refactor (skip_specs: true)
+            "skip_specs": bool(re.search(r"^\s*skip_specs:\s*true", metadata or "", re.MULTILINE)),
+        }
+
+    def _openspec_cards(self, change, unit, column_id, as_epic=True):
+        """the cards a change describes, before any of them is written.
+
+        'requirements' makes one story per requirement - the testable unit, because its scenarios
+        are the acceptance criteria. 'tasks' mirrors the checklist instead, so the board and
+        tasks.md say the same thing. every card carries the source it came from, which is what
+        makes a second import an update rather than a pile of duplicates.
+        """
+        label = f"{OPENSPEC_LABEL}/{change['id']}"
+        plan = []
+
+        if as_epic:
+            checked = len([task for task in change["tasks"] if task["done"]])
+            summary = [f"Imported from {change['folder']}."]
+            if change["capabilities"]:
+                summary.append(f"Capabilities: {', '.join(change['capabilities'])}.")
+            summary.append(f"{len(change['requirements'])} requirement(s), "
+                           f"{checked}/{len(change['tasks'])} tasks checked off.")
+            if change["proposal"]:
+                summary.append("")
+                summary.append(change["proposal"])
+
+            plan.append({
+                "source": f"openspec:{change['id']}#change",
+                "title": f"OpenSpec change: {change['id']}",
+                "description": "\n".join(summary),
+                "type": "epic",
+                "labels": [label],
+                "column": column_id,
+                "done": False,
+            })
+
+        if unit in ("requirements", "both"):
+            for requirement in change["requirements"]:
+                capability = _labelify(requirement.get("capability"), 20)
+
+                plan.append({
+                    "source": (f"openspec:{change['id']}#req:{requirement.get('capability') or 'spec'}"
+                               f":{_labelify(requirement['name'], 40)}"),
+                    "title": requirement["name"],
+                    "description": _requirement_markdown(change, requirement),
+                    "type": "story",
+                    "labels": [label] + ([capability] if capability else [])
+                              + [f"os-{requirement.get('kind', 'added')}"],
+                    "column": column_id,
+                    "done": False,
+                    "note": "" if requirement.get("scenarios") else
+                            f"'{requirement['name']}' has no scenario, so nothing about it is testable yet",
+                })
+
+        if unit in ("tasks", "both"):
+            for task in change["tasks"]:
+                group = _labelify(task.get("group"), 20)
+                number = f"{task['number']} " if task.get("number") else ""
+
+                plan.append({
+                    "source": (f"openspec:{change['id']}#task:"
+                               f"{task.get('number') or _labelify(task['title'], 40)}"),
+                    "title": f"{number}{task['title']}".strip(),
+                    "description": (f"From {change['folder']}/tasks.md"
+                                    + (f", under '{task['group']}'" if task.get("group") else "")
+                                    + (f" - already checked off in the file" if task["done"] else "")),
+                    "type": "task",
+                    "labels": [label] + ([group] if group else []),
+                    "column": column_id,
+                    "done": bool(task["done"]),
+                })
+
+        # two requirements can share a name across capabilities and two untitled tasks can share
+        # a title. sources have to be one per card, or updating them becomes a coin toss
+        seen = {}
+        for entry in plan:
+            count = seen.get(entry["source"], 0)
+            seen[entry["source"]] = count + 1
+            if count:
+                entry["source"] = f"{entry['source']}#{count + 1}"
+
+        return plan
+
+    def _openspec_apply(self, plan, update_done=True):
+        """write a plan onto the board. a card whose source is already here gets its text
+        refreshed rather than duplicated: the files are the truth about the requirement, while
+        the column, priority, points, assignee and title of a card are yours and stay yours. a
+        task checked off in tasks.md is moved to a done column, and nothing is ever dragged
+        backwards out of one."""
+        known = {column["id"]: column for column in self.columns}
+        done_column = next((column for column in self.columns if column.get("done")), None)
+
+        added, updated, notes = [], [], []
+
+        for entry in plan:
+            existing = next((card for card in self.cards if card.get("source") == entry["source"]), None)
+
+            if existing is not None:
+                existing["description"] = entry["description"]
+                existing["type"] = entry["type"]
+                # labels are merged: the ones the import owns come back, your own triage stays
+                existing["labels"] = self._clean_labels(list(dict.fromkeys(
+                    (existing.get("labels") or []) + entry["labels"])))
+                existing["updated"] = _now()
+                updated.append(existing)
+
+                if entry["done"] and update_done and done_column is not None \
+                        and not self._column_is_done(known.get(existing.get("column"))):
+                    self._place(existing, done_column["id"])
+
+                continue
+
+            column_id = entry["column"]
+            if entry["done"] and done_column is not None:
+                column_id = done_column["id"]
+            elif known.get(entry["column"]) is None and len(self.columns):
+                column_id = self.columns[self._default_column_index()]["id"]
+
+            card = self._new_card(
+                title=entry["title"],
+                column_id=column_id,
+                description=entry["description"],
+                card_type=entry["type"],
+                labels=entry["labels"],
+                source=entry["source"],
+            )
+
+            self._place(card, column_id)
+            self.card_store.append(card)
+            added.append(card)
+
+            if entry.get("note"):
+                notes.append(entry["note"])
+
+        return added, updated, notes
+
+    @core.module.tool
+    async def import_openspec(self, change: str = None, root: str = None, unit: str = None,
+                             column: str = None, as_epic: bool = True, update_done: bool = True,
+                             dry_run: bool = False, max_cards: int = None):
+        """Turns an OpenSpec change into board cards by reading openspec/changes/<change>/: each
+        requirement becomes a story with its #### Scenario: lines as acceptance criteria, or each
+        tasks.md checkbox when unit is 'tasks'. Reading the files instead of your memory of them is
+        what makes the cards reviewable, and re-running it updates the cards it made rather than
+        adding duplicates. Nothing is written outside the board, and your project is never touched.
+
+        Args:
+            change: the change id (a folder under openspec/changes). Leave it out when only one
+                change is in flight; read_openspec lists them
+            root: which configured openspec_roots entry to read, when there is more than one
+            unit: 'requirements' (one testable story per requirement, the default), 'tasks' (one
+                card per tasks.md checkbox) or 'both'
+            column: where the cards land (name or id). Defaults to the first column that is not done
+            as_epic: also file one epic card holding the change itself, with the proposal's intent
+                on it, so a whole batch is recognisable on the board
+            update_done: move cards whose task is checked off in tasks.md into a done column
+            dry_run: report what would happen and write nothing, so the user can agree first
+            max_cards: cap on cards created by this call, defaulting to openspec_max_cards
+        """
+        self._reload()
+
+        problem = self._openspec_ready()
+        if problem:
+            return self.result(problem, success=False)
+
+        _shown, absolute, problem = self._openspec_root(root)
+        if problem:
+            return self.result(problem, success=False)
+
+        base = self._openspec_base(absolute)
+        if not base:
+            return self.result("there is no openspec/changes folder to read from that root",
+                               success=False)
+
+        ids = self._openspec_change_ids(base)
+        if not ids:
+            return self.result(f"{base} has no changes in flight - openspec/changes is empty, so "
+                               "there is nothing to import yet", success=False)
+
+        if change:
+            index, problem = self._lookup([{"id": entry} for entry in ids], change, "id")
+            if index < 0:
+                return self.result(f"no openspec change matching '{change}' "
+                                   f"(in flight: {', '.join(ids)})", success=False)
+            change_id = ids[index]
+        elif len(ids) == 1:
+            change_id = ids[0]
+        else:
+            return self.result(f"several changes are in flight, which one? ({', '.join(ids)})", success=False)
+
+        unit = _slug(unit) or _slug(self.config.get("openspec_default_unit")) or "requirements"
+        if unit not in OPENSPEC_UNITS:
+            return self.result(f"unknown unit '{unit}', use one of: {', '.join(OPENSPEC_UNITS)}", success=False)
+
+        if column:
+            column_index, problem = self._column(column)
+            if column_index < 0:
+                return self.result(self._not_found("column", column, problem), success=False)
+            target = self.columns[column_index]
+        else:
+            index = self._default_column_index()
+            if index < 0:
+                return self.result("the board has no columns, create one with add_column first", success=False)
+            target = self.columns[index]
+
+        parsed = self._openspec_change(base, change_id)
+        if not parsed["requirements"] and not parsed["tasks"]:
+            hint = (" it declares skip_specs, so its work is only in tasks.md - which looks empty "
+                    "too, so either the change is still being drafted or it is not an openspec change"
+                    if parsed["skip_specs"] else
+                    " a change whose specs/ folder has no '### Requirement:' blocks and whose "
+                    "tasks.md has no checkboxes has nothing for the board to hold")
+            return self.result(f"openspec/changes/{change_id} has no requirements and no tasks -{hint}",
+                               success=False)
+
+        plan = self._openspec_cards(parsed, unit, target["id"], as_epic=bool(as_epic))
+        limit = int(max_cards if max_cards is not None else (self.config.get("openspec_max_cards") or 0))
+
+        truncated = 0
+        if limit and len(plan) > limit:
+            truncated = len(plan) - limit
+            plan = plan[:limit]
+
+        sources = {card.get("source") for card in self.cards if card.get("source")}
+        fresh = len([entry for entry in plan if entry["source"] not in sources])
+
+        if dry_run:
+            lines = [f"openspec/changes/{change_id} as {unit} into {target['name']} "
+                     f"(nothing written yet):", f"  {fresh} new card(s), "
+                     f"{len(plan) - fresh} already on the board would be refreshed"]
+            for entry in plan[:20]:
+                mark = "=" if entry["source"] in sources else "+"
+                lines.append(f"  {mark} {entry['type']}: {entry['title']}")
+            if len(plan) > 20:
+                lines.append(f"  .. and {len(plan) - 20} more")
+            if truncated:
+                lines.append(f"  {truncated} card(s) were cut off by the max_cards limit")
+
+            return self.result("\n".join(lines))
+
+        added, updated, notes = self._openspec_apply(plan, update_done=bool(update_done))
+
+        if added or updated:
+            self._save()
+            self.broadcast_board("cards_imported")
+
+        lines = [f"imported openspec/changes/{change_id} ({unit}) into {target['name']}: "
+                 f"{len(added)} card(s) added, {len(updated)} refreshed"]
+        for card in added[:20]:
+            lines.append(f"  [{card['id']}] {card['title']}")
+        if len(added) > 20:
+            lines.append(f"  .. and {len(added) - 20} more")
+        if truncated:
+            lines.append(f"  {truncated} card(s) were left out by the max_cards limit")
+        if not added and updated:
+            lines.append("  nothing new: the board already had this change, its text is now current")
+        lines.extend(f"  note: {note}" for note in notes)
+        lines.append(f"  the cards carry the '{OPENSPEC_LABEL}/{change_id}' label, and ticked tasks "
+                     "follow tasks.md - never the other way round")
+
+        return self.result("\n".join(lines))
+
+    @core.module.tool
+    async def read_openspec(self, change: str = None, root: str = None, show_tasks: bool = False):
+        """Reads the OpenSpec changes that are in flight and how they relate to the board: what is
+        specified, how much of it is already on the board, and which requirements are not testable
+        yet because they have no scenario. Read-only - it answers 'what is still unplanned?'"""
+        self._reload()
+
+        problem = self._openspec_ready()
+        if problem:
+            return self.result(problem, success=False)
+
+        _shown, absolute, problem = self._openspec_root(root)
+        if problem:
+            return self.result(problem, success=False)
+
+        base = self._openspec_base(absolute)
+        if not base:
+            return self.result("there is no openspec/changes folder to read from that root", success=False)
+
+        ids = self._openspec_change_ids(base)
+        if not ids:
+            return self.result(f"{base} has no changes in flight", success=False)
+
+        on_board = {}
+        for card in self.cards:
+            change_of = _openspec_change_of(card)
+            if change_of:
+                on_board[change_of] = on_board.get(change_of, 0) + 1
+
+        if change:
+            index, problem = self._lookup([{"id": entry} for entry in ids], change, "id")
+            if index < 0:
+                return self.result(f"no openspec change matching '{change}' "
+                                   f"(in flight: {', '.join(ids)})", success=False)
+
+            parsed = self._openspec_change(base, ids[index])
+            sources = {card.get("source"): card["id"] for card in self.cards if card.get("source")}
+
+            lines = [f"openspec/changes/{parsed['id']}"
+                     + (" (skip_specs)" if parsed["skip_specs"] else "")
+                     + f" - capabilities: {', '.join(parsed['capabilities']) or 'none'}"
+                     + (", design.md present" if parsed["has_design"] else "")]
+
+            for requirement in parsed["requirements"]:
+                source = (f"openspec:{parsed['id']}#req:{requirement.get('capability') or 'spec'}"
+                          f":{_labelify(requirement['name'], 40)}")
+                scenarios = len(requirement["scenarios"])
+                lines.append(f"  [{sources.get(source, 'not on the board')}] "
+                             f"{requirement.get('capability', '?')}/{requirement['name']} "
+                             f"({requirement['kind']}, {scenarios} scenario(s)"
+                             + (", NOT TESTABLE YET" if not scenarios else "") + ")")
+
+            if show_tasks or not parsed["requirements"]:
+                for task in parsed["tasks"]:
+                    source = (f"openspec:{parsed['id']}#task:"
+                              f"{task.get('number') or _labelify(task['title'], 40)}")
+                    lines.append(f"  [{'x' if task['done'] else ' '}] "
+                                 f"{task.get('number') or '-'} {task['title']} "
+                                 f"-> {sources.get(source, 'not on the board')}")
+
+            if not parsed["requirements"] and not parsed["tasks"]:
+                lines.append("  nothing here yet: no requirements and no tasks")
+
+            return self.result("\n".join(lines))
+
+        lines = [f"openspec changes in flight in {base}:"]
+
+        for change_id in ids:
+            parsed = self._openspec_change(base, change_id)
+            checked = len([task for task in parsed["tasks"] if task["done"]])
+            untestable = len([requirement for requirement in parsed["requirements"]
+                              if not requirement["scenarios"]])
+
+            lines.append(f"  {change_id} - {len(parsed['requirements'])} requirement(s), "
+                         f"{checked}/{len(parsed['tasks'])} tasks checked off, "
+                         f"{on_board.get(change_id, 0)} card(s) on this board"
+                         + (f", {untestable} requirement(s) without a scenario" if untestable else ""))
+
+        lines.append("")
+        lines.append("import one with import_openspec - it reads these files rather than your "
+                     "memory of them, and re-running it refreshes the cards instead of duplicating")
+
+        return self.result("\n".join(lines))
 
     # ------------------------------------------------------------------
     # command
@@ -1660,13 +3239,36 @@ class ProjectBoard(core.module.Module):
             "columns": [dict(column) for column in self.columns],
             "cards": cards,
             "stats": self._stats(),
+            # the play buttons of this board, so the panel can render them without a second
+            # request. the examples the action editor offers are not here on purpose: they are
+            # static text the editor fetches once, from actions/examples
+            "actions": self._ui_actions(),
             "options": {
                 "types": list(CARD_TYPES),
                 "priorities": list(PRIORITIES),
+                "placeholders": list(CARD_PLACEHOLDERS),
+                "spec_placeholders": list(SPEC_PLACEHOLDERS),
+                "openspec_units": list(OPENSPEC_UNITS),
             },
             "settings": {
                 "keep_chat_input": bool(self.config.get("keep_chat_input", True)),
+                "enable_prompt_actions": bool(self.config.get("enable_prompt_actions", True)),
+                "openspec": self._openspec_ui_state(),
             },
+        }
+
+    def _openspec_ui_state(self):
+        """what the panel may offer for openspec. deliberately no file reading here: opening the
+        board should not touch your project, the strip asks for the changes when you open it"""
+        roots = self._openspec_roots()
+        problem = self._openspec_ready()
+
+        return {
+            "enabled": bool(self.config.get("enable_openspec", True)),
+            "ready": not problem and bool(roots),
+            "problem": problem,
+            "roots": [shown for shown, _absolute in roots],
+            "default_unit": _slug(self.config.get("openspec_default_unit")) or "requirements",
         }
 
     @webui.route("board")
@@ -1831,4 +3433,181 @@ class ProjectBoard(core.module.Module):
             column=body.get("id"),
             cards=body.get("cards") or "move",
             target_column=body.get("target_column") or None,
+        )
+
+    # ------------------------------------------------------------------
+    # routes: prompt actions (the panel's play buttons)
+    # ------------------------------------------------------------------
+
+    @webui.route("actions/list")
+    async def _route_actions_list(self, body=None, query=None):
+        """the board's prompt actions plus the placeholder cheat-sheet the editor shows"""
+        self._reload()
+
+        return {
+            "actions": self._ui_actions(),
+            "placeholders": list(CARD_PLACEHOLDERS),
+            "examples": len(ACTION_EXAMPLES),
+            "enabled": bool(self.config.get("enable_prompt_actions", True)),
+        }
+
+    @webui.route("actions/examples")
+    async def _route_actions_examples(self, body=None, query=None):
+        """the templates the action editor offers as a starting point. served from the same
+        constant the AI's list_prompt_action_examples reads, so the panel and your AI always
+        describe the same set of examples"""
+        return {"examples": [dict(example) for example in ACTION_EXAMPLES],
+                "placeholders": list(CARD_PLACEHOLDERS)}
+
+    @webui.route("action/save", method="POST")
+    async def _route_action_save(self, body=None, query=None):
+        """create one, or edit the one whose id came in. the editor posts the whole form"""
+        body = body or {}
+
+        if body.get("id"):
+            return await self.edit_prompt_action(
+                action=body.get("id"),
+                name=body.get("name"),
+                template=body.get("template"),
+                column=body.get("column", ""),
+                move_to=body.get("move_to", ""),
+                log_as_comment=bool(body.get("log_as_comment")),
+                order=body.get("order"),
+            )
+
+        return await self.add_prompt_action(
+            name=body.get("name"),
+            template=body.get("template"),
+            column=body.get("column") or None,
+            move_to=body.get("move_to") or None,
+            log_as_comment=bool(body.get("log_as_comment")),
+        )
+
+    @webui.route("action/delete", method="POST")
+    async def _route_action_delete(self, body=None, query=None):
+        body = body or {}
+        return await self.delete_prompt_action(body.get("id"))
+
+    @webui.route("action/render", method="POST")
+    async def _route_action_render(self, body=None, query=None):
+        """what a play button asks for first: the template with this card's fields in it. the
+        panel puts that text into the chat input, which is as far as this goes - a button press
+        never sends a message by itself"""
+        body = body or {}
+        return await self._play_action(body.get("action"), body.get("card") or body.get("id"))
+
+    @webui.route("action/launched", method="POST")
+    async def _route_action_launched(self, body=None, query=None):
+        """and then the side effects the action was configured with (move the card, log the
+        prompt on it), recorded when the button was pressed"""
+        body = body or {}
+        return await self._action_launched(body.get("action"), body.get("card") or body.get("id"),
+                                           prompt=body.get("prompt"))
+
+    # ------------------------------------------------------------------
+    # routes: process spec
+    # ------------------------------------------------------------------
+
+    async def _render_spec_prompt(self, title=None, spec=None):
+        """the spec prompt, with the pasted spec and this board's names in it. rendered here
+        rather than in the panel so that what you see is what the module settings say"""
+        self._reload()
+
+        spec = str(spec or "").strip()
+        if not spec:
+            return None, "there is no spec in there yet - paste or type it first"
+
+        return _render(self.config.get("spec_action_prompt") or DEFAULT_SPEC_PROMPT, {
+            "title": str(title or "").strip() or "Untitled spec",
+            "spec": spec,
+            "board": self.board["name"] if self.board else "",
+            "backlog": self._backlog_column(),
+            "date": _today().isoformat(),
+        }), ""
+
+    @webui.route("spec/render", method="POST")
+    async def _route_spec_render(self, body=None, query=None):
+        """renders the process-spec prompt. the panel calls it both for its preview and to fill
+        the chat input, so there is one place that decides what the button actually says"""
+        body = body or {}
+
+        prompt, problem = await self._render_spec_prompt(body.get("title"), body.get("spec"))
+        if problem:
+            return self.result(problem, success=False)
+
+        return {
+            "prompt": prompt,
+            "board": self.board["name"] if self.board else "",
+            "backlog": self._backlog_column(),
+            "chars": len(str(body.get("spec") or "").strip()),
+        }
+
+    # ------------------------------------------------------------------
+    # routes: openspec
+    # ------------------------------------------------------------------
+
+    @webui.route("openspec/changes")
+    async def _route_openspec_changes(self, body=None, query=None):
+        """the changes in flight, for the board's openspec strip. the files are only read when
+        the strip is actually opened, and never written"""
+        self._reload()
+
+        state = self._openspec_ui_state()
+        payload = dict(state)
+        payload["changes"] = []
+        payload["unit"] = state["default_unit"]
+
+        if not state["ready"]:
+            payload["problem"] = state["problem"] or "no openspec folder is configured for this module"
+            return payload
+
+        for _shown, absolute in self._openspec_roots():
+            base = self._openspec_base(absolute)
+            if not base:
+                continue
+
+            on_board = {}
+            for card in self.cards:
+                change_of = _openspec_change_of(card)
+                if change_of:
+                    on_board[change_of] = on_board.get(change_of, 0) + 1
+
+            for change_id in self._openspec_change_ids(base):
+                parsed = self._openspec_change(base, change_id)
+                checked = len([task for task in parsed["tasks"] if task["done"]])
+
+                payload["changes"].append({
+                    "id": change_id,
+                    "root": _shown,
+                    "capabilities": parsed["capabilities"],
+                    "requirements": len(parsed["requirements"]),
+                    "untestable": len([requirement for requirement in parsed["requirements"]
+                                       if not requirement["scenarios"]]),
+                    "tasks": len(parsed["tasks"]),
+                    "tasks_done": checked,
+                    "on_board": on_board.get(change_id, 0),
+                    "skip_specs": parsed["skip_specs"],
+                })
+
+            payload["base"] = base
+            break
+
+        if not payload["changes"]:
+            payload["problem"] = "no changes in flight in the configured openspec folder"
+
+        return payload
+
+    @webui.route("openspec/import", method="POST")
+    async def _route_openspec_import(self, body=None, query=None):
+        """the strip's "land these stories" button, which goes through the same tool your AI
+        uses so both paths mean exactly the same thing"""
+        body = body or {}
+        return await self.import_openspec(
+            change=body.get("change") or None,
+            root=body.get("root") or None,
+            unit=body.get("unit") or None,
+            column=body.get("column") or None,
+            as_epic=bool(body.get("as_epic", True)),
+            update_done=bool(body.get("update_done", True)),
+            dry_run=bool(body.get("dry_run")),
         )

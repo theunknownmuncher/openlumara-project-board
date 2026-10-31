@@ -51,8 +51,9 @@ full-screen board.
   (board order / priority / points / due / newest / alphabetical), hide-done toggle
 - a progress bar (cards in done columns), a board summary line (cards, percent done, open points,
   blocked, overdue) and a blocked / overdue pill in the header
-- `n` new card, `shift + N` new board, `/` search, `r` reload, `Esc` back to the chat, and
-  `alt + ←/→/↑/↓` to move the focused card between columns or reorder it — no mouse needed
+- `n` new card, `shift + N` new board, `/` search, `r` reload, `a` prompt actions, `s` process a
+  spec, `c` copy what you can see as a brief, `Esc` back to the chat, and `alt + ←/→/↑/↓` to move
+  the focused card between columns or reorder it — no mouse needed
 - it keeps itself current. It loads the moment you open it, and while it stays on screen it
   reloads on a timer you control from the bottom status bar: an **auto-refresh** checkbox plus a
   field for the interval in seconds (5 by default). With the box unticked and its field greyed
@@ -62,6 +63,64 @@ full-screen board.
   first
 - works on a phone: the switcher and both strips wrap, one column at a time, swipe sideways,
   card dialogs stack vertically
+
+### Play buttons: prompts *you* wrote, one press
+
+The board can hold **prompt actions**: prompt templates you wrote, with `{placeholders}` for a
+card's fields in them. Each one becomes a ▶ button on a card, and pressing it drops the finished
+prompt into the chat input and focuses it — **it never sends anything**, so you always read what
+is about to be asked and press enter yourself.
+
+- press ▶ (or `p` on a focused card) and the card's own fields are already filled in:
+  `Work on card 7QK3MZ ("Add the toggle") on the General board, which sits in In Progress…`
+- one button when one action applies to the card; a small menu when several do (`shift + p`), and
+  every action there can be **copied** instead of filled in, which is the quick way to paste a
+  task into any prompt you are typing
+- an action can be scoped to **one column**, so play means something different in the backlog
+  ("plan this, write no code") than it does in review ("go through the diff against the card")
+- optionally a press also moves the card ("this stage is done") and leaves the prompt on the card
+  as a comment, so there is a trail of what each button asked for
+- **nothing is canned.** `a` opens the action editor: 17 shipped examples fill the form so you
+  never start from a blank page, and what you save is yours to rewrite. They are never created
+  behind your back, and they live on the board they belong to
+- placeholders: `{id} {title} {description} {column} {board} {type} {priority} {assignee}`
+  `{labels} {points} {due} {comments} {change} {date}`. Braces around anything else are left
+  exactly as you wrote them, so json or code inside a prompt survives untouched
+- **copy brief** (`c`, or the copy icon) puts the cards you can see on the clipboard as a numbered
+  markdown list (`1. [7QK3MZ] Add the toggle (3p, high)`), honouring your filters — handy for
+  "work through these in order" or for pasting today's plan somewhere else
+
+Ask your AI to set your buttons up ("give me a play button for the backlog that plans instead of
+implements") — it has tools for that too, and `list_prompt_actions` tells it what your buttons
+will do when you say "I just played that card".
+
+### OpenSpec: from a spec to testable stories
+
+If your project uses [OpenSpec](https://github.com/Fission-AI/OpenSpec), the board reads it
+instead of retyping it.
+
+- the ✨ button opens **process spec**: paste what you want built, preview the prompt, and it
+  fills your chat with a prompt (from the `spec_action_prompt` setting, yours to rewrite) that
+  tells your AI to turn the spec into an OpenSpec change and land its stories in the backlog.
+  The spec itself never lands on the board — only the work it produced
+- `project-board_import_openspec` then reads `openspec/changes/<change>/`: each
+  `### Requirement:` becomes a **story** whose acceptance criteria are the requirement's
+  `#### Scenario:` GIVEN/WHEN/THEN lines — the testable unit, not a vibe. Ask for `unit="tasks"`
+  instead and the board mirrors `tasks.md` one checkbox per card
+- re-importing **refreshes instead of duplicating**: a card remembers the requirement or task it
+  came from, so the files stay the truth about what a story says while the column, priority,
+  points, assignee and title stay yours. A task ticked off in `tasks.md` moves to a done column,
+  and nothing is ever dragged backwards out of one
+- imported cards carry an `openspec/<change>` label, so a whole change is one filter away, and
+  `read_openspec` answers "what is specified, what is on the board, and which requirements have
+  no scenario yet?"
+- the layers button opens a strip listing the changes in flight with their numbers, and *land
+  stories* quotes the counts before it writes anything
+- **strictly read-only.** The module parses OpenSpec's markdown, never runs the `openspec` CLI and
+  never writes into your project — ticking a box in `tasks.md` stays the job of whatever module
+  you edit code with. Only the folders in `openspec_roots` can be read at all, the archive folder
+  is finished work and never backlog, and a change that declares `skip_specs` still gets its
+  task list
 
 ### For your AI
 
@@ -75,6 +134,7 @@ full-screen board.
 | `project-board_read_board` | The board as compact lines with short card ids, with column / text / assignee / priority / label / type filters, descriptions on request, and `board=` to look at another board without switching |
 | `project-board_board_stats` | Progress, per-column counts, WIP limit breaches, blocked / overdue / unassigned counts, per-person workload and label usage (great for standups), `board=` to summarize another project |
 | `project-board_add_card` | Create a card (column, type, priority, assignee, labels, points, due date, blocked, top-or-bottom) |
+| `project-board_add_cards` | A whole batch in one call — the shape to use when you break a spec or a project down: one write, one push, and a per-item report of what landed and what was skipped |
 | `project-board_edit_card` | Change any field; empty values clear description / assignee / labels / due |
 | `project-board_move_card` | Move to another column, optionally above a specific card (use it whenever work progresses) |
 | `project-board_reorder_column` | Set the top-to-bottom order of a column, i.e. prioritize the work |
@@ -82,6 +142,11 @@ full-screen board.
 | `project-board_delete_card` | Remove a card and its comments |
 | `project-board_add_comment` / `project-board_delete_comment` | Leave progress notes and questions on a card |
 | `project-board_add_column` / `project-board_update_column` / `project-board_delete_column` | Shape a board's workflow: rename, WIP limits, done flags, reordering, and where the cards of a deleted column go |
+| `project-board_list_prompt_actions` | The user's own play buttons on this board, with the templates — so you know what "I played that card" is about to ask for |
+| `project-board_add_prompt_action` / `project-board_edit_prompt_action` / `project-board_delete_prompt_action` | Set those buttons up: label, template, which columns it shows on, and what a press does besides filling the chat input. Pressing one stays a human gesture — no tool can press it |
+| `project-board_list_prompt_action_examples` | The shipped templates, so you can offer a starting point instead of a blank page |
+| `project-board_import_openspec` | Turn `openspec/changes/<change>/` into cards (requirements with their scenarios, or the `tasks.md` checklist). Read-only, idempotent, and `dry_run=true` says the numbers first |
+| `project-board_read_openspec` | The changes in flight: what is specified, how much is on the board already, and which requirements have no scenario yet |
 
 **Writes only ever touch the active board.** `read_board` and `board_stats` can look at another
 board with `board="…"`, which never moves the pen — so your AI can compare two projects and then
@@ -131,20 +196,29 @@ header; on other channels (`/board`, cli, telegram, …) the tools and the comma
 | `default_board_name` | `General` | Name of the board created the first time the module runs, and the name the first project gets when it takes over board-less storage from an older install |
 | `default_columns` | `Backlog, To Do, In Progress, Done` | The column layout every new board starts out with. A column named Done, Closed, Complete or Completed counts as finished work. Changing it later does not touch existing boards |
 | `keep_chat_input` | `true` | Keep the chat input bar visible while the board is open, so you can tell your AI to change the board without leaving it. Off = full-screen board |
+| `enable_prompt_actions` | `true` | The play buttons and the action editor. Off hides them; your templates stay on the board. Even on, a press only fills the chat input — nothing is sent for you |
+| `spec_action_prompt` | *(the OpenSpec-shaped prompt)* | What the process-spec button fills into the chat, with the pasted spec in it. Placeholders `{title}`, `{spec}`, `{board}`, `{backlog}`, `{date}`. Rewrite it if your project plans differently |
+| `enable_openspec` | `true` | Read `openspec/changes/<change>/` and turn it into cards. The board never writes to your project and never runs the openspec CLI |
+| `openspec_roots` | *(empty)* | The folders your OpenSpec projects live in: the repository root that contains `openspec/`, or an `openspec` folder itself — same shape as the coder module's `sandbox_paths`. Nothing outside this list is ever read, so the feature sleeps until you point it at a repo |
+| `openspec_default_unit` | `requirements` | What one card stands for: one testable story per requirement (its scenarios become the acceptance criteria), one card per `tasks.md` checkbox, or both |
+| `openspec_max_cards` | `60` | How many cards one import may create, so a monster spec cannot flood the backlog. Cards already on the board are refreshed regardless |
 | `enable_webui_extension` | `true` | Auto-added by the framework; toggles the board panel and its API routes |
 
 ## Files
 
 ```
-module.py                                       <- module: tools, commands, prompt, /api/ext/project-board routes
+module.py                                       <- module: tools, commands, prompt, /api/ext/project-board routes, openspec reader
 webui/templates/chat/index.html                 <- the board panel (below_header slot: it takes the chat panel over)
 webui/templates/chat/header.html                <- chat header toggle button (right slot)
-webui/templates/modals/project_board_card.html  <- card dialog (fields + comments)
+webui/templates/modals/project_board_card.html  <- card dialog (fields, comments, play buttons)
+webui/templates/modals/project_board_actions.html <- prompt action editor (your templates + the examples)
+webui/templates/modals/project_board_spec.html  <- process spec dialog (paste a spec, preview, fill the chat)
 webui/templates/svg/board.svg                   <- board icon used by the header button
 webui/assets/js/project_board.js                <- panel logic (Alpine store "projectBoard"), boards, drag & drop, keyboard
 webui/assets/css/project_board.css              <- board + dialog styles (everything is namespaced under .pb-)
 tests/conftest.py                               <- self-contained fixtures (tmp data folder, fake manager)
-tests/test_board.py                             <- tool surface, routes, stats, boards and prompts
+tests/test_board.py                             <- tool surface, routes, templates, openspec reader, stats and prompts
+tests/fixtures/openspec/                        <- a real-shaped openspec project the reader is tested against
 pytest.ini                                      <- so the suite runs on its own, wherever the repo's own pytest config lives
 LICENSE                                         <- GPL-3.0-or-later
 README.md                                       <- this file
@@ -159,7 +233,9 @@ Board data lives in OpenLumara's data folder, as plain JSON you can eyeball or h
 ```
 <data>/project_board_boards.json    <- one entry per board, with the active one flagged
 <data>/project_board_columns.json   <- every board's columns; "board" says which one, "order" where it sits
-<data>/project_board_cards.json     <- every board's cards; "board" and "column" say where a card lives
+<data>/project_board_cards.json     <- every board's cards; "board" and "column" say where a card lives,
+                                       "source" what it was imported from (empty for cards you typed)
+<data>/project_board_actions.json   <- the prompt actions; "board" and "column" scope each button
 ```
 
 ## Notes
@@ -167,6 +243,17 @@ Board data lives in OpenLumara's data folder, as plain JSON you can eyeball or h
 - auto-refresh is a preference of the panel (status bar, kept in `localStorage`), not a module
   setting. It used to be the `refresh_interval` module setting; a leftover line for it in
   `config.yml` is ignored.
+- **A play button never runs the agent.** It renders the template, fills the chat input and
+  focuses it; you read it and press enter. That is also why a tool cannot press one — setting the
+  buttons up is the AI's job, launching work is yours. With `keep_chat_input` off the board is
+  full-screen, so a press reveals the input bar for as long as the prompt sits there.
+- **Prompt templates are plain text.** `{placeholder}` substitution, nothing else: no `str.format`,
+  no evaluation, so a template cannot reach into anything and unknown `{braces}` are left alone.
+- **OpenSpec reading is read-only by design**, and limited to `openspec_roots`. Writing
+  `tasks.md` stays with your code tools, which is also why the board can read a change whether or
+  not the openspec CLI is installed.
+- An imported card remembers its `source`, which is what makes re-importing a refresh instead of a
+  duplicate. Delete the card and the next import creates it again.
 - **WIP limits warn, they do not block.** Going over a limit is a decision, not an error, so both
   the panel and the tools answer with a warning instead of a refusal.
 - **Deleting a board deletes its cards.** It refuses while the board still has cards unless you
@@ -183,8 +270,8 @@ Board data lives in OpenLumara's data folder, as plain JSON you can eyeball or h
   which one you are looking at.
 - Hand-edited storage is repaired instead of being lost: cards whose column disappeared are
   adopted by the first column of their board, items pointing at a board that no longer exists are
-  adopted by the first board, and a board list with nothing flagged active falls back to the first
-  board.
+  adopted by the first board, a prompt action whose column vanished goes back to working board-wide,
+  and a board list with nothing flagged active falls back to the first board.
 - Storage from before boards existed (one set of cards and columns, no `board` field) is migrated
   on the first start after updating: it becomes the `default_board_name` board with its columns in
   the order they were in, and nothing is renamed or dropped.

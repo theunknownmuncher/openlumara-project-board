@@ -109,6 +109,23 @@
                 </div>
             </template>
 
+            <template x-if="card && $store.projectBoard.actionsFor(card).length">
+                <div class="pb-modal-play">
+                    <span class="pb-field-label">play this card</span>
+                    <template x-for="action in $store.projectBoard.actionsFor(card)" :key="action.id">
+                        <button type="button" class="pb-btn play"
+                                :title="action.template + '\n\nthis fills the chat input; you press enter.'"
+                                @click="$store.projectBoard.playAction(card, action)">
+                            &#9654; <span x-text="action.name"></span>
+                        </button>
+                    </template>
+                    <span class="pb-modal-hint">
+                        the prompt is filled in, never sent - and
+                        <button type="button" class="pb-link" @click="$store.projectBoard.openActions()">these buttons are yours to edit</button>
+                    </span>
+                </div>
+            </template>
+
             <div class="pb-modal-actions">
                 <template x-if="card">
                     <button type="button" class="pb-btn danger" @click="$store.projectBoard.deleteCard(card)">

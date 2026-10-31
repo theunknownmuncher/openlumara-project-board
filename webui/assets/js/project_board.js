@@ -24,8 +24,28 @@ const PROJECT_BOARD = {
     columns: [],
     cards: [],
     stats: null,
-    options: { types: [], priorities: [] },
-    settings: { keep_chat_input: true },
+    options: { types: [], priorities: [], placeholders: [], spec_placeholders: [], openspec_units: [] },
+    settings: { keep_chat_input: true, enable_prompt_actions: true, openspec: { ready: false } },
+
+    // prompt actions: play buttons whose prompts the user wrote. a press only fills the chat
+    // input, so nothing here can start the agent by accident
+    actions: [],
+    examples: [],
+    actionEditor: null,        // { id: null | "AB12CD" } while the action dialog is open
+    actionForm: {},
+    actionExample: "",
+    openMenu: "",              // card id whose action menu is open
+    copied: "",                // what was copied last, so the panel can say so briefly
+
+    // the process-spec dialog: paste a spec in, get the templated prompt into the chat
+    specDraft: { title: "", spec: "", preview: "", showPreview: false, busy: false },
+
+    // openspec: the changes in flight, read from the project when the strip is opened
+    showOpenspec: false,
+    openspecLoading: false,
+    openspecNote: "",
+    openspec: { ready: false, enabled: true, roots: [], changes: [], problem: "",
+                unit: "requirements", as_epic: true },
 
     boards: [],                // every board, with its counts
     activeBoardId: "",
@@ -69,6 +89,7 @@ const PROJECT_BOARD = {
     _timerSeconds: 0,          // the interval the running timer was started with
     _watchingTab: false,
     _chatScroll: null,         // where the chat was scrolled to while the board covers it
+    _peekTimer: null,          // while a prompt sits in the chat input, the input stays visible
     _chain: Promise.resolve(),
 
     /* ------------------------------------------------------------------
@@ -100,6 +121,7 @@ const PROJECT_BOARD = {
         localStorage.setItem("pb.open", "false");
         this.applyBodyClass();
         this.stopPolling();
+        this.hideInputPeek();
 
         // #messages is laid out again from here, so the reading position goes back to the
         // chat once the browser has had a frame to remeasure the turns
@@ -108,7 +130,8 @@ const PROJECT_BOARD = {
 
     applyBodyClass() {
         document.body.classList.toggle("pb-board-open", this.open);
-        // keep_chat_input off: the board is full-screen, so the input goes too
+        // keep_chat_input off: the board is full-screen, so the input goes too - unless a play
+        // button just filled it with a prompt, which is what pb-input-peek is for
         document.body.classList.toggle("pb-hide-input", this.open && !this.settings.keep_chat_input);
     },
 
@@ -313,9 +336,17 @@ const PROJECT_BOARD = {
             this.activeBoardId = board.active ? board.active.id : "";
             if (!this.showBoardSettings) this.syncBoardDraft();
 
+            // the play buttons of this board, and the placeholder cheat-sheet for the editor
+            this.actions = board.actions || [];
+            if (board.options) this.options = board.options;
+
+            // a press's menu is about cards of the board it was opened on
+            this.openMenu = "";
+
             // settings can change in the module settings dialog without a page reload
             if (board.settings) {
                 this.settings = board.settings;
+                this.openspec = Object.assign({}, this.openspec, board.settings.openspec || {});
                 this.applyBodyClass();
             }
 
@@ -704,7 +735,7 @@ const PROJECT_BOARD = {
         }
 
         // the rest only applies while the board is the visible panel, and never
-        // while typing or while a dialog is open
+        // while typing, while a dialog is open, or while a press is in flight
         if (!this.open || Alpine.store("ui").currentModal) return;
 
         const tag = (event.target.tagName || "").toLowerCase();
@@ -714,10 +745,18 @@ const PROJECT_BOARD = {
         }
         if (event.altKey || event.ctrlKey || event.metaKey) return;
 
+        // the letter keys below fire from a plain if-chain, one of which is awaited
+        // (playAction), so the whole handler is async by nature
+        return this._shortcuts(event);
+    },
+
+    async _shortcuts(event) {
         if (event.key === "Escape") {
             // escape backs out of an open strip first, and only then out of the board
             if (this.showBoardSettings) return (this.showBoardSettings = false);
             if (this.creatingBoard) return (this.creatingBoard = false);
+            if (this.showOpenspec) return (this.showOpenspec = false);
+            if (this.openMenu) return (this.openMenu = "");
 
             return this.hide();
         }
@@ -738,6 +777,42 @@ const PROJECT_BOARD = {
         else if (event.key === "r") {
             this.refresh(true);
         }
+        else if (event.key === "a") {
+            event.preventDefault();
+            this.openActions();
+        }
+        else if (event.key === "s") {
+            event.preventDefault();
+            this.openSpec();
+        }
+        else if (event.key === "c") {
+            event.preventDefault();
+            this.copyBrief();
+        }
+        else if (event.key === "p") {
+            // play the first action that applies to the focused card. the prompt only ends up in
+            // the chat input, so the key is as safe as clicking the button
+            const card = this.focusedCard();
+            if (!card) return;
+
+            event.preventDefault();
+
+            const actions = this.actionsFor(card);
+            if (!actions.length) return this.flash("no prompt action applies to this card - press a to set some up");
+
+            if (actions.length > 1 && event.shiftKey) return this.toggleMenu(card);
+
+            await this.playAction(card, actions[0]);
+        }
+    },
+
+    /* the card the keyboard is on, which is how p and alt+arrows know what you mean */
+    focusedCard() {
+        const element = document.activeElement;
+        if (!element || !element.closest) return null;
+
+        const card = element.closest(".pb-card");
+        return card ? this.cardById(card.dataset.cardId) : null;
     },
 
     /* ------------------------------------------------------------------
@@ -963,6 +1038,479 @@ const PROJECT_BOARD = {
             this.comments = (this.cardById(card.id) || {}).comments || [];
         } catch (e) {
             this.error = this.errorText(e);
+        }
+    },
+
+    /* ------------------------------------------------------------------
+       prompt actions: the play buttons
+
+       a press renders the action's template for that card on the server, puts the
+       result in the chat input and focuses it. it never sends: the user always sees the
+       prompt and presses enter themselves, which is why there is no "send immediately"
+       option to fear. the action's own side effects (move the card, log the prompt on it)
+       are applied at press time, so other tabs see the same thing.
+       ------------------------------------------------------------------ */
+
+    actionsEnabled() {
+        return this.settings.enable_prompt_actions !== false;
+    },
+
+    actionsFor(card) {
+        if (!this.actionsEnabled() || !card) return [];
+
+        // no column on an action means the whole board, a column means that stage only - which
+        // is how play means something different in review than it does in the backlog
+        return this.actions.filter(action => !action.column || action.column === card.column);
+    },
+
+    primaryAction(card) {
+        return this.actionsFor(card)[0] || null;
+    },
+
+    menuOpen(card) {
+        return this.openMenu === card.id;
+    },
+
+    toggleMenu(card) {
+        this.openMenu = this.openMenu === card.id ? "" : card.id;
+    },
+
+    async playAction(card, action) {
+        if (!card || !action) return;
+
+        this.openMenu = "";
+
+        try {
+            const rendered = await simpleApiPost("/api/ext/project-board/action/render", {
+                action: action.id,
+                card: card.id,
+            });
+
+            this.prefillChat(rendered.prompt);
+
+            await simpleApiPost("/api/ext/project-board/action/launched", {
+                action: action.id,
+                card: card.id,
+                prompt: rendered.prompt,
+            });
+
+            await this.load();
+            this.flash(`"${rendered.name}" is in the chat input - enter sends it`);
+        } catch (e) {
+            this.error = this.errorText(e);
+        }
+    },
+
+    async copyActionPrompt(card, action) {
+        if (!card || !action) return;
+
+        this.openMenu = "";
+
+        try {
+            const rendered = await simpleApiPost("/api/ext/project-board/action/render", {
+                action: action.id,
+                card: card.id,
+            });
+
+            await this.copyText(rendered.prompt, `prompt for ${card.id}`);
+        } catch (e) {
+            this.error = this.errorText(e);
+        }
+    },
+
+    /* the whole point of a press is that the prompt lands where you can still edit it, so
+       with keep_chat_input off (board full-screen, input bar hidden) the bar is revealed for
+       the moment - and goes back once the prompt has been sent or cleared */
+    prefillChat(text) {
+        const chat = Alpine.store("chat");
+        if (chat) chat.user_input = text;
+
+        this.revealInput();
+
+        setTimeout(() => {
+            const el = document.getElementById("user-input");
+            if (!el) return;
+
+            el.focus();
+            // the autosize library only reacts to real input events, and a prompt that is
+            // twelve lines long wants a twelve line box
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.selectionStart = el.selectionEnd = String(el.value).length;
+        }, 30);
+    },
+
+    revealInput() {
+        document.body.classList.add("pb-input-peek");
+
+        if (this._peekTimer !== null) clearInterval(this._peekTimer);
+        this._peekTimer = setInterval(() => {
+            const chat = Alpine.store("chat");
+            if (!this.open || !chat || !String(chat.user_input || "").trim()) this.hideInputPeek();
+        }, 400);
+    },
+
+    hideInputPeek() {
+        if (this._peekTimer !== null) {
+            clearInterval(this._peekTimer);
+            this._peekTimer = null;
+        }
+
+        document.body.classList.remove("pb-input-peek");
+    },
+
+    /* clipboard, with a fallback: /api and the panel are usually served over plain http on a
+       LAN address, where navigator.clipboard does not exist at all */
+    async copyText(text, label) {
+        let copied = false;
+
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(text);
+                copied = true;
+            }
+        } catch (e) {
+            copied = false;
+        }
+
+        if (!copied) {
+            const area = document.createElement("textarea");
+            area.value = text;
+            area.setAttribute("readonly", "");
+            area.style.position = "fixed";
+            area.style.top = "-1000px";
+            document.body.appendChild(area);
+            area.select();
+
+            try {
+                copied = document.execCommand("copy");
+            } catch (e) {
+                copied = false;
+            }
+
+            area.remove();
+        }
+
+        if (!copied) return (this.error = "your browser would not let me copy - select and copy it yourself");
+
+        this.copied = label || "copied";
+        setTimeout(() => { if (this.copied === (label || "copied")) this.copied = ""; }, 2500);
+    },
+
+    /* the visible cards as a numbered list, which is the shape a session brief or a "work
+       through these in order" message wants. filters are honoured, so a filtered board copies
+       the slice you are looking at rather than the whole project */
+    briefText() {
+        const lines = [];
+        let index = 0;
+
+        for (const column of this.shownColumns()) {
+            const cards = this.visibleCards(column.id);
+            if (!cards.length) continue;
+
+            lines.push(`## ${column.name}`);
+
+            for (const card of cards) {
+                index += 1;
+
+                const meta = [
+                    card.points ? `${card.points}p` : "",
+                    card.priority === "critical" || card.priority === "high" ? card.priority : "",
+                    card.blocked ? "blocked" : "",
+                    card.due ? `due ${card.due}` : "",
+                ].filter(Boolean).join(", ");
+
+                lines.push(`${index}. [${card.id}] ${card.title}${meta ? ` (${meta})` : ""}`);
+            }
+
+            lines.push("");
+        }
+
+        return lines.join("\n").trim();
+    },
+
+    async copyBrief() {
+        const text = this.briefText();
+        if (!text) return this.flash("nothing to copy - no card matches the filters");
+
+        await this.copyText(text, `${text.split("\n").length} lines copied`);
+    },
+
+    /* ------------------------------------------------------------------
+       the action editor: your templates, your buttons
+       ------------------------------------------------------------------ */
+
+    async loadExamples() {
+        if (this.examples.length) return this.examples;
+
+        try {
+            const data = await simpleApiFetch("/api/ext/project-board/actions/examples");
+            this.examples = data.examples || [];
+        } catch (e) {
+            this.error = this.errorText(e);
+        }
+
+        return this.examples;
+    },
+
+    blankAction() {
+        return { name: "", template: "", column: "", move_to: "", log_as_comment: false, order: null };
+    },
+
+    async openActions() {
+        if (!this.actionsEnabled()) return this.flash("prompt actions are switched off in the module settings");
+
+        this.error = "";
+        await this.loadExamples();
+
+        this.actionEditor = { id: null };
+        this.actionForm = this.blankAction();
+        this.actionExample = "";
+
+        Alpine.store("ui").openModal("project_board_actions");
+    },
+
+    editAction(action) {
+        this.actionEditor = { id: action.id };
+        this.actionForm = {
+            name: action.name || "",
+            template: action.template || "",
+            column: action.column || "",
+            move_to: action.move_to || "",
+            log_as_comment: !!action.log_as_comment,
+            order: null,
+        };
+        this.actionExample = "";
+        this.error = "";
+    },
+
+    newAction() {
+        this.actionEditor = { id: null };
+        this.actionForm = this.blankAction();
+        this.actionExample = "";
+        this.error = "";
+    },
+
+    // picking an example fills the editor with it. nothing is saved until you press save, and
+    // the example is never added to the board behind your back
+    applyExample() {
+        const example = this.examples.find(entry => entry.name === this.actionExample);
+        if (!example) return;
+
+        this.actionForm.name = example.name;
+        this.actionForm.template = example.template;
+        // an example suggests a stage; keep it only when this board actually has that column
+        const column = this.columns.find(entry => entry.name.toLowerCase() === String(example.column || "").toLowerCase());
+        this.actionForm.column = column ? column.id : "";
+    },
+
+    closeActions() {
+        this.actionEditor = null;
+        this.actionForm = {};
+        Alpine.store("ui").closeModal();
+    },
+
+    async saveAction() {
+        if (this.saving) return;
+
+        const name = String(this.actionForm.name || "").trim();
+        if (!name) return (this.error = "the button needs a name - that is what it says");
+
+        const template = String(this.actionForm.template || "");
+        if (!template.trim()) return (this.error = "the action needs a prompt template");
+
+        this.saving = true;
+        this.error = "";
+
+        const payload = {
+            name: name,
+            template: template,
+            column: this.actionForm.column || "",
+            move_to: this.actionForm.move_to || "",
+            log_as_comment: !!this.actionForm.log_as_comment,
+        };
+
+        try {
+            if (this.actionEditor && this.actionEditor.id) {
+                await simpleApiPost("/api/ext/project-board/action/save", {
+                    ...payload, id: this.actionEditor.id,
+                });
+            } else {
+                await simpleApiPost("/api/ext/project-board/action/save", payload);
+            }
+
+            await this.load();
+            this.newAction();
+            this.flash("prompt actions saved");
+        } catch (e) {
+            this.error = this.errorText(e);
+        } finally {
+            this.saving = false;
+        }
+    },
+
+    async deleteAction(action) {
+        if (!window.confirm(`Delete the prompt action "${action.name}"? The cards stay.`)) return;
+
+        try {
+            await simpleApiPost("/api/ext/project-board/action/delete", { id: action.id });
+            await this.load();
+
+            if (this.actionEditor && this.actionEditor.id === action.id) this.newAction();
+        } catch (e) {
+            this.error = this.errorText(e);
+        }
+    },
+
+    // the module swaps the two actions' positions, which is how the one you press most ends up
+    // in front without anyone having to renumber anything
+    async shiftAction(action, direction) {
+        const index = this.actions.indexOf(action);
+        const target = index + (direction === "up" ? -1 : 1);
+        if (index < 0 || target < 0 || target >= this.actions.length) return;
+
+        try {
+            await simpleApiPost("/api/ext/project-board/action/save", { id: action.id, order: target });
+            await this.load();
+
+            const moved = this.actions.find(entry => entry.id === action.id);
+            if (moved && this.actionEditor && this.actionEditor.id === action.id) this.editAction(moved);
+        } catch (e) {
+            this.error = this.errorText(e);
+        }
+    },
+
+    /* ------------------------------------------------------------------
+       process spec: a spec goes in, stories come back on the board
+       ------------------------------------------------------------------ */
+
+    openSpec() {
+        this.specDraft = { title: "", spec: "", preview: "", showPreview: false, busy: false };
+        this.error = "";
+        Alpine.store("ui").openModal("project_board_spec");
+    },
+
+    closeSpec() {
+        Alpine.store("ui").closeModal();
+    },
+
+    // pasting a whole spec into a chat message is a thing to be deliberate about, so say what
+    // a very large paste means instead of letting the model choke on it silently
+    specWarning() {
+        const chars = String(this.specDraft.spec || "").length;
+        if (chars < 40000) return "";
+
+        return `${chars.toLocaleString()} characters is a lot for one message. It often works better to put the spec in a file and tell your AI to read that file - then this button is only needed once.`;
+    },
+
+    async renderSpec() {
+        return simpleApiPost("/api/ext/project-board/spec/render", {
+            title: this.specDraft.title,
+            spec: this.specDraft.spec,
+        });
+    },
+
+    async previewSpec() {
+        if (this.specDraft.busy) return "";
+
+        this.specDraft.busy = true;
+        this.error = "";
+
+        try {
+            const data = await this.renderSpec();
+            this.specDraft.preview = data.prompt;
+            this.specDraft.showPreview = true;
+            return data.prompt;
+        } catch (e) {
+            this.error = this.errorText(e);
+            return "";
+        } finally {
+            this.specDraft.busy = false;
+        }
+    },
+
+    async processSpec() {
+        if (this.specDraft.busy) return;
+
+        this.specDraft.busy = true;
+        this.error = "";
+
+        try {
+            const data = await this.renderSpec();
+
+            this.prefillChat(data.prompt);
+            Alpine.store("ui").closeModal();
+            this.flash(`spec for ${data.board} is in the chat input - enter sends it`);
+        } catch (e) {
+            this.error = this.errorText(e);
+        } finally {
+            this.specDraft.busy = false;
+        }
+    },
+
+    /* ------------------------------------------------------------------
+       openspec strip: what is specified, and what is on the board
+       ------------------------------------------------------------------ */
+
+    openspecReady() {
+        return Boolean(this.openspec.enabled !== false && this.openspec.ready);
+    },
+
+    async toggleOpenspec() {
+        this.showOpenspec = !this.showOpenspec;
+        if (this.showOpenspec) await this.loadOpenspec();
+    },
+
+    async loadOpenspec() {
+        this.openspecLoading = true;
+
+        try {
+            const data = await simpleApiFetch("/api/ext/project-board/openspec/changes");
+
+            // the unit chosen in the strip is a browser preference, the rest comes from settings
+            this.openspec = Object.assign({}, this.openspec, data, {
+                unit: localStorage.getItem("pb.openspec-unit") || data.unit || "requirements",
+            });
+        } catch (e) {
+            this.error = this.errorText(e);
+        } finally {
+            this.openspecLoading = false;
+        }
+    },
+
+    setOpenspecUnit(unit) {
+        localStorage.setItem("pb.openspec-unit", unit);
+        this.openspec.unit = unit;
+    },
+
+    /* the dry run comes first so the confirmation can quote real numbers - importing is a
+       write to the board, and a spec that turns into 40 cards deserves one click of doubt */
+    async importChange(change) {
+        if (this.openspecLoading) return;
+
+        this.openspecLoading = true;
+        this.error = "";
+
+        const base = { change: change.id, root: change.root, unit: this.openspec.unit,
+                       as_epic: !!this.openspec.as_epic };
+
+        try {
+            const plan = await simpleApiPost("/api/ext/project-board/openspec/import",
+                                             { ...base, dry_run: true });
+
+            if (!window.confirm(`${change.id} -> ${this.openspec.unit} cards\n\n${plan}
+
+Add them to the board? The files are never written to.`)) return;
+
+            const result = await simpleApiPost("/api/ext/project-board/openspec/import", base);
+
+            this.openspecNote = String(result).split("\n")[0];
+            await this.load();
+            await this.loadOpenspec();
+            this.flash(this.openspecNote);
+        } catch (e) {
+            this.error = this.errorText(e);
+        } finally {
+            this.openspecLoading = false;
         }
     },
 

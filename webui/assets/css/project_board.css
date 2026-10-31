@@ -965,6 +965,335 @@ body.pb-board-open.pb-hide-input #chat-window > #input {
    small screens: one column worth of width at a time, scroll sideways
    ========================================================================== */
 
+/* ==========================================================================
+   play buttons: your templates, one press, prompt in the chat input
+   ========================================================================== */
+
+.pb-play {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    margin-right: 2px;
+    padding-right: 4px;
+    border-right: 1px solid var(--border-color);
+}
+
+.pb-icon.play {
+    color: var(--accent);
+}
+
+.pb-icon.play:hover {
+    background: var(--accent);
+    color: var(--bg-primary);
+}
+
+/* the menu of the other prompt actions for a card, hung under it. .pb-slot is the
+   anchor so the menu can sit outside the card it belongs to */
+.pb-slot {
+    position: relative;
+}
+
+.pb-menu {
+    position: absolute;
+    top: calc(100% + 2px);
+    right: 0;
+    z-index: 30;
+    min-width: 15rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 4px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+
+.pb-menu-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.pb-menu-row button[type="button"] {
+    flex: 1;
+    text-align: left;
+    padding: 4px 6px;
+    font-size: 0.75rem;
+    background: none;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.pb-menu-row button[type="button"]:hover {
+    background: var(--button-bg);
+}
+
+.pb-menu-row .pb-icon {
+    flex: 0 0 auto;
+    width: 22px;
+    justify-content: center;
+}
+
+.pb-menu-foot {
+    padding: 4px 6px;
+    margin-top: 2px;
+    text-align: left;
+    font-size: 0.68rem;
+    background: none;
+    border: none;
+    border-top: 1px solid var(--border-color);
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.pb-menu-foot:hover {
+    color: var(--accent);
+}
+
+/* a press revealed the input bar on purpose, so it beats the full-screen rule */
+body.pb-board-open.pb-hide-input.pb-input-peek #chat-window > #input {
+    display: flex;
+}
+
+/* ==========================================================================
+   strips: openspec, and the status bar's copy / hint notes
+   ========================================================================== */
+
+.pb-openspec {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 10px;
+    margin-bottom: 6px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+}
+
+.pb-openspec-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.pb-openspec-id {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.pb-openspec-meta {
+    flex: 1;
+    color: var(--text-muted);
+}
+
+.pb-openspec-problem,
+.pb-openspec-note {
+    margin: 0;
+    color: var(--text-muted);
+}
+
+.pb-copied {
+    color: var(--tool-completed-color);
+}
+
+.pb-action-hint {
+    color: var(--text-muted);
+}
+
+.pb-link {
+    padding: 0;
+    background: none;
+    border: none;
+    font-size: inherit;
+    color: var(--accent);
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+/* ==========================================================================
+   the two editors that write prompts
+   ========================================================================== */
+
+.pb-modal-note {
+    margin: 0 0 10px;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+.pb-modal-note code,
+.pb-placeholders code {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 0 3px;
+}
+
+.pb-modal-empty {
+    margin: 6px 0;
+    font-size: 0.76rem;
+    color: var(--text-muted);
+}
+
+.pb-modal-hint {
+    flex: 1;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.pb-action-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px;
+    margin-bottom: 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+}
+
+.pb-action-list-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+
+.pb-action-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 3px 4px;
+    border-radius: var(--radius-sm);
+}
+
+.pb-action-row.editing {
+    background: var(--button-bg);
+}
+
+.pb-action-name {
+    padding: 2px 4px;
+    background: none;
+    border: none;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.pb-action-name:hover {
+    color: var(--accent);
+}
+
+.pb-action-scope,
+.pb-action-flag {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+}
+
+.pb-action-flag {
+    color: var(--info);
+}
+
+.pb-action-tools {
+    display: inline-flex;
+    gap: 2px;
+    margin-left: auto;
+}
+
+.pb-action-tools .pb-icon:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.pb-modal-body .pb-template,
+.pb-modal-body .pb-spec-body {
+    font-family: ui-monospace, monospace;
+    font-size: 0.76rem;
+    line-height: 1.45;
+}
+
+.pb-placeholders {
+    margin: 6px 0;
+    font-size: 0.74rem;
+    color: var(--text-muted);
+}
+
+.pb-placeholders summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+}
+
+.pb-placeholders p {
+    margin: 4px 0;
+    line-height: 1.9;
+}
+
+.pb-placeholder {
+    margin-right: 4px;
+    color: var(--accent);
+}
+
+.pb-modal-play {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-top: 10px;
+    margin-top: 10px;
+    border-top: 1px solid var(--border-color);
+}
+
+.pb-modal-play .pb-field-label {
+    width: 100%;
+}
+
+.pb-btn.play {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.pb-btn.play:hover {
+    background: var(--accent);
+    color: var(--bg-primary);
+}
+
+.pb-spec-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 6px 0;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+
+.pb-spec-warning {
+    margin: 6px 0 0;
+    font-size: 0.74rem;
+    color: var(--info);
+}
+
+.pb-spec-preview {
+    max-height: 18rem;
+    overflow: auto;
+    padding: 8px;
+    margin: 0 0 10px;
+    white-space: pre-wrap;
+    font-family: ui-monospace, monospace;
+    font-size: 0.74rem;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+}
+
 @media (max-width: 768px) {
     .pb-board {
         padding: 6px 6px 0;
@@ -1015,5 +1344,18 @@ body.pb-board-open.pb-hide-input #chat-window > #input {
 
     .pb-field-col.pb-narrow {
         flex: 1;
+    }
+
+    .pb-action-tools {
+        margin-left: 0;
+    }
+
+    .pb-menu {
+        left: 0;
+        right: auto;
+    }
+
+    .pb-openspec-row .pb-btn {
+        width: 100%;
     }
 }

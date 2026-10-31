@@ -1,0 +1,138 @@
+{# project-board -- Copyright (C) 2026 theunknownmuncher <theunknownmuncher@protonmail.com>
+   SPDX-License-Identifier: GPL-3.0-or-later #}
+{# -- AI-GENERATED CODE (Qwen3.8 Flash Next) :: (2026-10-29) status:reviewed harness:openlumara --
+   Prompt action dialog: the play buttons this board has, and an editor for one of them.
+   Templates are written by the user - the module only substitutes the card's fields, which is
+   why pressing play can fill the chat without ever running anything. Auto-discovered from
+   templates/modals/, opened with $store.ui.openModal('project_board_actions'). #}
+
+<template x-if="$store.ui.currentModal === 'project_board_actions' && $store.projectBoard" x-cloak>
+    <div class="modal pb-action-modal" @keydown.escape.window="$store.projectBoard.closeActions()">
+        <div class="header">
+            <h2>Prompt actions</h2>
+            <button class="close" @click="$store.projectBoard.closeActions()"
+                    aria-label="Close the prompt action editor">&times;</button>
+        </div>
+
+        <div class="pb-modal-body">
+            <p class="pb-modal-note">
+                A prompt action is a prompt <b>you</b> wrote, with <code>{placeholders}</code> for the
+                card's fields in it. Its play button drops the finished prompt into the chat input and
+                focuses it - it never sends anything by itself, so you always see what is about to be
+                asked. Nothing is on this list unless you put it here.
+            </p>
+
+            <div class="pb-action-list">
+                <div class="pb-action-list-header">
+                    <span x-text="$store.projectBoard.actions.length + ' on this board'"></span>
+                    <button type="button" class="pb-btn" @click="$store.projectBoard.newAction()">new action</button>
+                </div>
+
+                <template x-if="!$store.projectBoard.actions.length">
+                    <p class="pb-modal-empty">
+                        No play buttons yet. Pick an example below to start from, ask your AI to set some
+                        up, or write one from scratch.
+                    </p>
+                </template>
+
+                <template x-for="(action, index) in $store.projectBoard.actions" :key="action.id">
+                    <div class="pb-action-row" :class="{ editing: $store.projectBoard.actionEditor
+                             && $store.projectBoard.actionEditor.id === action.id }">
+                        <button type="button" class="pb-action-name" :title="action.template"
+                                @click="$store.projectBoard.editAction(action)"
+                                x-text="action.name"></button>
+
+                        <span class="pb-action-scope"
+                              x-text="action.column_name ? action.column_name : 'whole board'"></span>
+                        <span class="pb-action-flag" x-show="action.move_to_name"
+                              x-text="'&rarr; ' + action.move_to_name"></span>
+                        <span class="pb-action-flag" x-show="action.log_as_comment">logs it</span>
+
+                        <span class="pb-action-tools">
+                            <button type="button" class="pb-icon" title="move up"
+                                    :disabled="index === 0"
+                                    @click="$store.projectBoard.shiftAction(action, 'up')">&uarr;</button>
+                            <button type="button" class="pb-icon" title="move down"
+                                    :disabled="index === $store.projectBoard.actions.length - 1"
+                                    @click="$store.projectBoard.shiftAction(action, 'down')">&darr;</button>
+                            <button type="button" class="pb-icon danger" title="delete this action"
+                                    @click="$store.projectBoard.deleteAction(action)">
+                                {% include 'svg/trash.svg' %}
+                            </button>
+                        </span>
+                    </div>
+                </template>
+            </div>
+
+            <label class="pb-field-label" for="pb-action-example">start from an example</label>
+            <select id="pb-action-example" class="pb-input" x-model="$store.projectBoard.actionExample"
+                    @change="$store.projectBoard.applyExample()"
+                    title="fills the editor below - nothing is saved until you press save">
+                <option value="">pick one of the shipped templates..</option>
+                <template x-for="example in $store.projectBoard.examples" :key="example.name">
+                    <option :value="example.name" x-text="example.name + ' - ' + example.blurb"></option>
+                </template>
+            </select>
+
+            <label class="pb-field-label" for="pb-action-name">button label</label>
+            <input id="pb-action-name" class="pb-input" type="text" placeholder="Implement this task"
+                   x-model="$store.projectBoard.actionForm.name">
+
+            <div class="pb-field-row">
+                <div class="pb-field-col">
+                    <label class="pb-field-label" for="pb-action-column">show it on</label>
+                    <select id="pb-action-column" class="pb-input" x-model="$store.projectBoard.actionForm.column"
+                            title="a button scoped to one column is how play can mean something different in review than in the backlog">
+                        <option value="">every card on the board</option>
+                        <template x-for="column in $store.projectBoard.columns" :key="column.id">
+                            <option :value="column.id" x-text="'cards in ' + column.name"></option>
+                        </template>
+                    </select>
+                </div>
+                <div class="pb-field-col">
+                    <label class="pb-field-label" for="pb-action-move">when pressed, move the card to</label>
+                    <select id="pb-action-move" class="pb-input" x-model="$store.projectBoard.actionForm.move_to"
+                            title="only worth setting for a button that means 'this stage is done'">
+                        <option value="">leave it where it is</option>
+                        <template x-for="column in $store.projectBoard.columns" :key="column.id">
+                            <option :value="column.id" x-text="column.name"></option>
+                        </template>
+                    </select>
+                </div>
+            </div>
+
+            <label class="pb-field-label" for="pb-action-template">the prompt</label>
+            <textarea id="pb-action-template" class="pb-input pb-template" rows="12" spellcheck="false"
+                      placeholder="Work on card {id} ({title}) on the {board} board..&#10;&#10;{description}"
+                      x-model="$store.projectBoard.actionForm.template"></textarea>
+
+            <details class="pb-placeholders">
+                <summary>placeholders - what you can put in the prompt</summary>
+                <p>
+                    <template x-for="name in ($store.projectBoard.options.placeholders || [])" :key="name">
+                        <code class="pb-placeholder" x-text="'{' + name + '}'"></code>
+                    </template>
+                </p>
+                <p>
+                    <code>{change}</code> is the openspec change a card was imported from, empty when it
+                    was not. Braces around anything that is not listed stay exactly as you wrote them, so
+                    json and code in a prompt survive untouched.
+                </p>
+            </details>
+
+            <label class="pb-check" title="leave the finished prompt on the card, so there is a trail of what each press asked for">
+                <input type="checkbox" x-model="$store.projectBoard.actionForm.log_as_comment">
+                <span>log the prompt on the card as a comment</span>
+            </label>
+
+            <div class="pb-modal-actions">
+                <span class="pb-error" x-show="$store.projectBoard.error" x-text="$store.projectBoard.error" x-cloak></span>
+                <button type="button" class="pb-btn" @click="$store.projectBoard.closeActions()">close</button>
+                <button type="button" class="pb-btn primary"
+                        :disabled="$store.projectBoard.saving"
+                        @click="$store.projectBoard.saveAction()"
+                        x-text="$store.projectBoard.saving ? 'saving..' : ($store.projectBoard.actionEditor && $store.projectBoard.actionEditor.id ? 'save changes' : 'add action')"></button>
+            </div>
+        </div>
+    </div>
+</template>
