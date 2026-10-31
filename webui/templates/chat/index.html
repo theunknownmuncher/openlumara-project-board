@@ -116,8 +116,9 @@
                     @click="copyBrief()">
                 {% include 'svg/copy.svg' %}
             </button>
-            <button type="button" class="pb-btn icon" x-show="openspecReady()" x-cloak
-                    :class="{ active: showOpenspec }" title="openspec changes in flight"
+            <button type="button" class="pb-btn icon" x-show="openspecOffered()" x-cloak
+                    :class="{ active: showOpenspec }"
+                    title="openspec changes in flight - with nothing configured it opens to tell you what to set"
                     @click="toggleOpenspec()">
                 {% include 'svg/layers.svg' %}
             </button>
@@ -164,8 +165,9 @@
         </button>
     </div>
 
-    <div class="pb-strip" x-show="showOpenspec" x-cloak>
-        <span class="pb-strip-label">openspec</span>
+    <div class="pb-strip" x-show="showOpenspec && openspecReady()" x-cloak>
+        <span class="pb-strip-label"
+              x-text="openspec.changes.length ? `openspec (${openspec.changes.length})` : 'openspec'"></span>
 
         <select class="pb-input" title="what one card stands for when a change is imported"
                 x-model="openspec.unit" @change="setOpenspecUnit($event.target.value)">
@@ -188,6 +190,9 @@
             <p class="pb-openspec-problem" x-text="openspec.problem"></p>
         </template>
 
+        <!-- a real project has thirty changes in flight, not three, so the list scrolls instead
+             of pushing the board off the bottom of the panel -->
+        <div class="pb-openspec-list">
         <template x-for="change in openspec.changes" :key="change.id">
             <div class="pb-openspec-row">
                 <span class="pb-openspec-id" x-text="change.id"></span>
@@ -207,6 +212,7 @@
                 </button>
             </div>
         </template>
+        </div>
 
         <p class="pb-openspec-note">
             reading only - the board never writes into your project, and it never runs the openspec

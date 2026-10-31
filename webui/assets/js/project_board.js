@@ -1402,6 +1402,22 @@ const PROJECT_BOARD = {
         return `${chars.toLocaleString()} characters is a lot for one message. It often works better to put the spec in a file and tell your AI to read that file - then this button is only needed once.`;
     },
 
+    specLandingNote() {
+        /** why this board cannot land the stories the spec prompt asks for, in the dialog where
+         *  the user is about to ask for them. an empty string means it can, so nothing is shown. */
+        if (this.openspecReady()) return "";
+
+        if (this.openspec.enabled === false) {
+            return "openspec support is switched off in the module settings, so this prompt is on "
+                + "its own: your AI writes the files, and nothing is landed on the board for you";
+        }
+
+        const settings = this.settings && this.settings.openspec ? this.settings.openspec : {};
+        const problem = String(settings.problem || this.openspec.problem || "").trim();
+        return "your AI can write the change, but this board cannot land its stories yet - "
+            + (problem || "no openspec folder is configured in openspec_roots");
+    },
+
     async renderSpec() {
         return simpleApiPost("/api/ext/project-board/spec/render", {
             title: this.specDraft.title,
@@ -1450,6 +1466,14 @@ const PROJECT_BOARD = {
     /* ------------------------------------------------------------------
        openspec strip: what is specified, and what is on the board
        ------------------------------------------------------------------ */
+
+    openspecOffered() {
+        /** whether the strip is worth offering at all: on unless the module has openspec turned
+         *  off entirely. It stays offered when no folder is configured yet, because that is the
+         *  one state where the panel can actually tell you what to set - a hidden button leaves
+         *  the whole feature undiscoverable on a fresh install. */
+        return this.openspec.enabled !== false;
+    },
 
     openspecReady() {
         return Boolean(this.openspec.enabled !== false && this.openspec.ready);

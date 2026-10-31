@@ -37,6 +37,12 @@
             <p class="pb-spec-warning" x-show="$store.projectBoard.specWarning()"
                x-text="$store.projectBoard.specWarning()" x-cloak></p>
 
+            <!-- the default prompt ends by landing the stories with import_openspec, and that one
+                 step needs a folder the board is allowed to read. say so before the paste, not
+                 after the AI comes back empty handed -->
+            <p class="pb-spec-note" x-show="$store.projectBoard.specLandingNote()"
+               x-text="$store.projectBoard.specLandingNote()" x-cloak></p>
+
             <div class="pb-spec-meta">
                 <span x-text="($store.projectBoard.specDraft.spec || '').length + ' characters'"></span>
                 <button type="button" class="pb-btn" @click="$store.projectBoard.previewSpec()"

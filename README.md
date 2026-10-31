@@ -114,8 +114,17 @@ instead of retyping it.
 - imported cards carry an `openspec/<change>` label, so a whole change is one filter away, and
   `read_openspec` answers "what is specified, what is on the board, and which requirements have
   no scenario yet?"
-- the layers button opens a strip listing the changes in flight with their numbers, and *land
-  stories* quotes the counts before it writes anything
+- the layers button opens a strip listing the changes in flight with their numbers (a real
+  project had thirty, so the list scrolls and says how many it is holding), and *land stories*
+  quotes the counts before it writes anything
+- with nothing configured the strip is still offered, and opens to tell you which setting to
+  change, because a hidden button only leaves the feature undiscoverable
+- a change that only has a proposal so far - created, not yet written up - gets its epic card and
+  a note that the stories follow once it has requirements or tasks, rather than a refusal
+- a `tasks.md` line that runs to 700 characters (they do) is cut at a word for the card title and
+  kept in full in that card's description, so nothing is lost and nothing needs scrolling sideways
+- `read_openspec` ends with the answer instead of a raw list: `on this board: 3/4 requirement(s),
+  1 without a scenario`
 - **strictly read-only.** The module parses OpenSpec's markdown, never runs the `openspec` CLI and
   never writes into your project — ticking a box in `tasks.md` stays the job of whatever module
   you edit code with. Only the folders in `openspec_roots` can be read at all, the archive folder
@@ -199,7 +208,7 @@ header; on other channels (`/board`, cli, telegram, …) the tools and the comma
 | `enable_prompt_actions` | `true` | The play buttons and the action editor. Off hides them; your templates stay on the board. Even on, a press only fills the chat input — nothing is sent for you |
 | `spec_action_prompt` | *(the OpenSpec-shaped prompt)* | What the process-spec button fills into the chat, with the pasted spec in it. Placeholders `{title}`, `{spec}`, `{board}`, `{backlog}`, `{date}`. Rewrite it if your project plans differently |
 | `enable_openspec` | `true` | Read `openspec/changes/<change>/` and turn it into cards. The board never writes to your project and never runs the openspec CLI |
-| `openspec_roots` | *(empty)* | The folders your OpenSpec projects live in: the repository root that contains `openspec/`, or an `openspec` folder itself — same shape as the coder module's `sandbox_paths`. Nothing outside this list is ever read, so the feature sleeps until you point it at a repo |
+| `openspec_roots` | *(empty)* | The folders your OpenSpec projects live in: the repository root that contains `openspec/`, or an `openspec` folder itself — same shape as the coder module's `sandbox_paths`. Nothing outside this list is ever read, so the feature sleeps until you point it at a repo - and until then the panel says so out loud and names this setting |
 | `openspec_default_unit` | `requirements` | What one card stands for: one testable story per requirement (its scenarios become the acceptance criteria), one card per `tasks.md` checkbox, or both |
 | `openspec_max_cards` | `60` | How many cards one import may create, so a monster spec cannot flood the backlog. Cards already on the board are refreshed regardless |
 | `enable_webui_extension` | `true` | Auto-added by the framework; toggles the board panel and its API routes |

@@ -1495,14 +1495,84 @@ async def test_the_archive_is_finished_work_and_never_backlog(openspec_board):
 
     imported = await openspec_board.import_openspec(change="2025-01-23-old-theme")
     assert imported["status"] == "error"
-    assert "in flight: add-dark-mode, legacy-refactor, unfinished" in imported["content"]
+    assert "in flight: add-dark-mode, half-drafted, legacy-refactor, unfinished, verbose-tasks" \
+        in imported["content"]
 
 
-async def test_a_change_with_nothing_in_it_says_so_instead_of_adding_nothing_quietly(openspec_board):
+async def test_a_plain_file_sitting_in_changes_is_not_a_change(openspec_board):
+    """a real project has notes lying around in changes/ - RELEASE-NOTES.md, an
+    IMPLEMENTATION_ORDER.md somebody dropped there. offering one as a change means a button in
+    the panel that can only ever fail"""
+    assert (OPENSPEC_FOLDER / "changes/RELEASE-NOTES.md").exists(), "the fixture has the stray file"
+
+    state = await openspec_board._route_openspec_changes()
+    assert "RELEASE-NOTES" not in str(state["changes"])
+
+    listed = await openspec_board.read_openspec()
+    assert "RELEASE-NOTES" not in listed["content"]
+
+    imported = await openspec_board.import_openspec(change="RELEASE-NOTES.md")
+    assert imported["status"] == "error", "and it cannot even be asked for by name"
+
+
+async def test_a_change_that_is_only_a_proposal_still_gets_its_epic(openspec_board):
+    """a change that was created and not yet written up is normal in a real project: it has a
+    proposal and nothing else. refusing it loses the one card that is true about it"""
     result = await openspec_board.import_openspec(change="unfinished")
 
+    assert result["status"] == "success", result["content"]
+    assert [card["type"] for card in openspec_board.cards] == ["epic"]
+    assert "only has a proposal" in result["content"], "and it says the stories are still missing"
+
+    again = await openspec_board.import_openspec(change="unfinished")
+    assert len(openspec_board.cards) == 1, "and it is idempotent like everything else"
+    assert "0 card(s) added" in again["content"]
+
+
+async def test_a_change_with_truly_nothing_in_it_says_so(openspec_board):
+    result = await openspec_board.import_openspec(change="half-drafted")
+
     assert result["status"] == "error"
-    assert "no requirements and no tasks" in result["content"]
+    assert "no proposal" in result["content"], "the refusal says what is missing"
+
+
+async def test_a_task_line_too_long_for_a_card_is_cut_short_and_kept_in_full(openspec_board):
+    """real tasks.md lines run to 700+ characters. a card titled with one of those is unreadable
+    on a board, so the title is cut at a word and the card carries the whole line instead"""
+    result = await openspec_board.import_openspec(change="verbose-tasks", unit="tasks")
+    assert result["status"] == "success", result["content"]
+
+    tasks = [card for card in openspec_board.cards if card["type"] == "task"]
+    short = next(card for card in tasks if card["title"] == "1.1 Short one.")
+    long = next(card for card in tasks if card["title"].startswith("1.2 "))
+
+    assert len(long["title"]) <= 102, f"the title still has to fit on a card, got {len(long['title'])}"
+    assert long["title"].endswith("\u2026") and not long["title"].endswith(" \u2026")
+    assert " the golden tests" in long["description"], "nothing about the task is lost"
+    assert short["description"].endswith("file") or "1.1" not in short["description"], \
+        "a title that did not need cutting is not repeated in the description"
+
+    # and cutting the title does not stop a re-import from finding the card again
+    before = [card["id"] for card in openspec_board.cards]
+    await openspec_board.import_openspec(change="verbose-tasks", unit="tasks")
+    assert [card["id"] for card in openspec_board.cards] == before
+
+
+async def test_read_sums_up_what_is_already_on_the_board(openspec_board):
+    """the question this tool gets asked is 'what is still unplanned', so it answers it instead
+    of leaving the model to count lines"""
+    before = await openspec_board.read_openspec(change="add-dark-mode")
+    assert "nothing on this board yet" in before["content"]
+
+    await openspec_board.import_openspec(change="add-dark-mode", max_cards=3)
+
+    after = await openspec_board.read_openspec(change="add-dark-mode")
+    assert "on this board: 2/4 requirement(s)" in after["content"], after["content"]
+
+    await openspec_board.import_openspec(change="add-dark-mode")
+    full = await openspec_board.read_openspec(change="add-dark-mode")
+    assert "on this board: 4/4 requirement(s)" in full["content"]
+    assert "card(s) carrying the 'openspec/add-dark-mode' label" in full["content"]
 
 
 async def test_a_skip_specs_change_still_has_a_task_list(openspec_board):
@@ -1552,6 +1622,26 @@ async def test_read_says_what_is_specified_and_what_is_on_the_board(openspec_boa
     assert after["content"].count("ui/") == 3
 
 
+async def test_a_board_with_nothing_configured_says_what_to_set(isolated_paths):
+    """an empty openspec_roots is the first thing every new install sees, and a hidden button or a
+    bare 'not configured' leaves the feature undiscoverable, so the panel gets a sentence with the
+    setting's name in it"""
+    board = await build(enable_openspec=True)
+    state = board._openspec_ui_state()
+
+    assert state["enabled"] is True and state["ready"] is False
+    assert "openspec_roots" in state["problem"], "it names the setting to change"
+
+    assert board._ui_board()["settings"]["openspec"]["problem"], "the panel payload carries it"
+
+    # a folder that is configured but is not an openspec project is its own answer
+    board = await build(openspec_roots=[str(FIXTURES / "some-project-i-forgotten-to-clone")])
+    state = board._openspec_ui_state()
+
+    assert state["ready"] is False
+    assert "some-project-i-forgotten-to-clone" in state["problem"], "it says which folder came up empty"
+
+
 async def test_openspec_reading_can_be_switched_off():
     board = await build(enable_openspec=False, openspec_roots=[str(OPENSPEC_FOLDER)])
 
@@ -1583,7 +1673,7 @@ async def test_the_openspec_routes_answer_the_strips_two_questions(openspec_boar
     state = await openspec_board._route_openspec_changes()
     assert state["ready"] is True
     assert {entry["id"] for entry in state["changes"]} == {
-        "add-dark-mode", "legacy-refactor", "unfinished"}
+        "add-dark-mode", "half-drafted", "legacy-refactor", "unfinished", "verbose-tasks"}
 
     dark = next(entry for entry in state["changes"] if entry["id"] == "add-dark-mode")
     assert dark["requirements"] == 4 and dark["tasks"] == 7 and dark["tasks_done"] == 1
@@ -1688,6 +1778,20 @@ async def test_the_shipped_assets_carry_the_buttons_the_editors_and_the_reads():
 
     assert ".pb-play" in styles and ".pb-spec-preview" in styles and ".pb-openspec-row" in styles
 
+    # a real project had thirty changes in flight when this strip was designed around three, and
+    # an unbounded list pushed the entire board off the bottom of the panel
+    assert 'class="pb-openspec-list"' in panel and ".pb-openspec-list" in styles
+    list_rule = styles.split(".pb-openspec-list", 1)[1].split("}", 1)[0]
+    assert "max-height" in list_rule and "overflow-y: auto" in list_rule
+    assert "openspec.changes.length" in panel, "the strip says how many changes it is holding"
+
+    # a fresh install has no openspec_roots, so the strip has to be offered anyway (it opens to
+    # explain itself) and the spec dialog has to warn that its stories cannot be landed yet
+    assert 'x-show="openspecOffered()"' in panel and "openspecOffered()" in script
+    assert 'x-show="showOpenspec && openspecReady()"' in panel, "no pointless controls before setup"
+    assert "specLandingNote()" in script and 'class="pb-spec-note"' in spec
+    assert ".pb-spec-note" in styles
+
     # the play button only exists when an action applies, and its title reads the action - so
     # the binding has to sit inside an x-if rather than an x-show, or Alpine evaluates
     # primaryAction(card).name on a card that has none
@@ -1699,3 +1803,69 @@ async def test_the_shipped_assets_carry_the_buttons_the_editors_and_the_reads():
     for markup in (panel, actions, spec, dialog):
         for expression in re.findall(r':[\w.-]+="([^"]*)"', markup):
             assert "&#" not in expression, f"entity in an alpine expression: {expression[:60]}"
+
+
+async def test_every_tool_and_every_parameter_is_documented(board):
+    """what the model is handed is built out of these docstrings, so a parameter without a
+    description is a parameter it has to guess at - which is how a tool that takes a `root`
+    ends up being pointed at the wrong project"""
+    import core.tool_loader
+
+    class Channel:
+        def __init__(self, modules):
+            self.manager = type("M", (), {"modules": modules})()
+
+        def log(self, *args):
+            pass
+
+    loader = core.tool_loader.ToolLoader(Channel({"project-board": board}))
+    loader.register_module(board)
+
+    mine = {name: entry["tool"]["function"] for name, entry in loader.catalog.items()
+            if name.startswith("project-board_")}
+    assert len(mine) >= 24, f"the module offers {len(mine)} tools, which looks like a regression"
+
+    undocumented = []
+    for name, function in mine.items():
+        if not function.get("description"):
+            undocumented.append(f"{name} has no description")
+        for parameter, schema in function["parameters"]["properties"].items():
+            if not schema.get("description"):
+                undocumented.append(f"{name}.{parameter} has no description")
+            if schema["type"] not in ("string", "integer", "boolean", "array", "object", "number"):
+                undocumented.append(f"{name}.{parameter} is typed {schema['type']!r}")
+
+    assert not undocumented, "; ".join(undocumented)
+
+    # the two tools whose arguments are worth getting wrong, because they write a lot or read
+    # someone's project on the strength of a path
+    batch = mine["project-board_add_cards"]["parameters"]["properties"]
+    assert batch["cards"]["type"] == "array" and batch["labels"]["type"] == "array"
+    assert "openspec" in mine["project-board_import_openspec"]["description"].lower()
+    assert mine["project-board_import_openspec"]["parameters"]["properties"]["dry_run"]["type"] == "boolean"
+
+
+async def test_an_action_cannot_point_at_a_column_that_is_not_there(board):
+    """a play button that quietly moves nothing is worse than one that is not there, so a stage
+    that does not exist on this board is refused instead of being remembered as a dead setting"""
+    await add(board, "Add the toggle")
+    identifier = await action(board, name="Finish this", template="finish {id}")
+
+    refused = await board.edit_prompt_action(identifier, move_to="In Review")
+    assert refused["status"] == "error" and "column" in refused["content"]
+
+    entry = next(item for item in board.actions if item["id"] == identifier)
+    assert entry["move_to"] == "", "the old configuration is kept, not half applied"
+    assert entry["log_as_comment"] is False
+
+    assert (await board.add_prompt_action("Review this", "review {id}",
+                                          column="In Progress"))["status"] == "success"
+    assert (await board.add_prompt_action("Nope", "review {id}", column="In Review"))["status"] == "error"
+
+    assert (await board.add_column(name="In Review"))["status"] == "success"
+    review = column(board, "In Review")["id"]
+    assert (await board.edit_prompt_action(identifier, move_to="In Review",
+                                           log_as_comment=True))["status"] == "success"
+
+    entry = next(item for item in board.actions if item["id"] == identifier)
+    assert entry["move_to"] == review and entry["log_as_comment"] is True

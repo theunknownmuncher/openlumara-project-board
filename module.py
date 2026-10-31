@@ -394,6 +394,24 @@ def _labelify(text, limit=28):
     return cleaned[:limit].strip("-")
 
 
+def _shorten(text, limit=100):
+    """a card title out of a line of spec prose, cut at a word boundary.
+
+    real tasks.md lines run to 700+ characters, and a card title that long is unreadable on a
+    board - the whole line still goes into the description, so shortening loses nothing. returns
+    (title, shortened) so the caller knows it has to keep the original somewhere.
+    """
+    text = " ".join(str(text or "").split())
+    if len(text) <= limit:
+        return text, False
+
+    cut = text[:limit]
+    if " " in cut[limit // 2:]:
+        cut = cut[:cut.rfind(" ")]
+
+    return f"{cut.rstrip(' ,;:-')}\u2026", True
+
+
 def _parse_openspec_tasks(text):
     """tasks.md -> [{number, group, title, done}].
 
@@ -2807,11 +2825,28 @@ class ProjectBoard(core.module.Module):
         except (OSError, ValueError):
             return []
 
+    def _openspec_is_dir(self, base, relative):
+        """whether an entry of a folder inside a root is itself a folder.
+
+        asking the sandbox to list it is the check: a file raises, a folder does not. done this
+        way instead of with os.path so the one rule of this feature keeps holding - every path
+        into your project goes through the sandboxed helpers.
+        """
+        try:
+            core.sandbox_listdir(base, relative)
+        except (OSError, ValueError):
+            return False
+
+        return True
+
     def _openspec_change_ids(self, base):
         """the changes in flight. an archived change is finished work, not backlog, so the
-        archive folder is never read"""
+        archive folder is never read - and a plain file sitting in changes/ (a README, an
+        IMPLEMENTATION_ORDER.md someone left there) is not a change either.
+        """
         return [entry for entry in self._openspec_entries(base, "changes")
-                if entry != OPENSPEC_ARCHIVE and not entry.startswith(".")]
+                if entry != OPENSPEC_ARCHIVE and not entry.startswith(".")
+                and self._openspec_is_dir(base, f"changes/{entry}")]
 
     def _openspec_change(self, base, change_id):
         """one change folder, parsed: the proposal's intent, its requirements with their
@@ -2827,6 +2862,9 @@ class ProjectBoard(core.module.Module):
         capabilities = []
 
         for capability in self._openspec_entries(base, f"{folder}/specs"):
+            if not self._openspec_is_dir(base, f"{folder}/specs/{capability}"):
+                continue
+
             spec = self._openspec_read(base, f"{folder}/specs/{capability}/spec.md")
             if spec is None:
                 continue
@@ -2857,7 +2895,9 @@ class ProjectBoard(core.module.Module):
         label = f"{OPENSPEC_LABEL}/{change['id']}"
         plan = []
 
-        if as_epic:
+        # an epic for a change that has nothing but a .openspec.yaml would be a blank card, so it
+        # is filed when there is something on it to say: the proposal's intent, or work
+        if as_epic and (change["proposal"] or change["requirements"] or change["tasks"]):
             checked = len([task for task in change["tasks"] if task["done"]])
             summary = [f"Imported from {change['folder']}."]
             if change["capabilities"]:
@@ -2881,12 +2921,15 @@ class ProjectBoard(core.module.Module):
         if unit in ("requirements", "both"):
             for requirement in change["requirements"]:
                 capability = _labelify(requirement.get("capability"), 20)
+                title, shortened = _shorten(requirement["name"])
 
                 plan.append({
                     "source": (f"openspec:{change['id']}#req:{requirement.get('capability') or 'spec'}"
                                f":{_labelify(requirement['name'], 40)}"),
-                    "title": requirement["name"],
-                    "description": _requirement_markdown(change, requirement),
+                    "title": title,
+                    "description": (_requirement_markdown(change, requirement)
+                                    + (f"\n\nThe requirement is titled '{requirement['name']}' in full."
+                                       if shortened else "")),
                     "type": "story",
                     "labels": [label] + ([capability] if capability else [])
                               + [f"os-{requirement.get('kind', 'added')}"],
@@ -2900,14 +2943,19 @@ class ProjectBoard(core.module.Module):
             for task in change["tasks"]:
                 group = _labelify(task.get("group"), 20)
                 number = f"{task['number']} " if task.get("number") else ""
+                title, shortened = _shorten(f"{number}{task['title']}")
 
                 plan.append({
                     "source": (f"openspec:{change['id']}#task:"
                                f"{task.get('number') or _labelify(task['title'], 40)}"),
-                    "title": f"{number}{task['title']}".strip(),
+                    "title": title,
                     "description": (f"From {change['folder']}/tasks.md"
                                     + (f", under '{task['group']}'" if task.get("group") else "")
-                                    + (f" - already checked off in the file" if task["done"] else "")),
+                                    + (f" - already checked off in the file" if task["done"] else "")
+                                    # a long task line is cut short in the title, so the card has to
+                                    # carry the sentence the board could not show
+                                    + (f"\n\n{task['number']} {task['title']}".rstrip()
+                                       if shortened else "")),
                     "type": "task",
                     "labels": [label] + ([group] if group else []),
                     "column": column_id,
@@ -3048,16 +3096,16 @@ class ProjectBoard(core.module.Module):
             target = self.columns[index]
 
         parsed = self._openspec_change(base, change_id)
-        if not parsed["requirements"] and not parsed["tasks"]:
+        plan = self._openspec_cards(parsed, unit, target["id"], as_epic=bool(as_epic))
+
+        if not plan:
             hint = (" it declares skip_specs, so its work is only in tasks.md - which looks empty "
                     "too, so either the change is still being drafted or it is not an openspec change"
                     if parsed["skip_specs"] else
-                    " a change whose specs/ folder has no '### Requirement:' blocks and whose "
-                    "tasks.md has no checkboxes has nothing for the board to hold")
-            return self.result(f"openspec/changes/{change_id} has no requirements and no tasks -{hint}",
-                               success=False)
-
-        plan = self._openspec_cards(parsed, unit, target["id"], as_epic=bool(as_epic))
+                    " there is not even a proposal to put on an epic card, so there is nothing here "
+                    "a board could hold")
+            return self.result(f"openspec/changes/{change_id} has no requirements, no tasks and no "
+                               f"proposal -{hint}", success=False)
         limit = int(max_cards if max_cards is not None else (self.config.get("openspec_max_cards") or 0))
 
         truncated = 0
@@ -3098,6 +3146,12 @@ class ProjectBoard(core.module.Module):
             lines.append(f"  {truncated} card(s) were left out by the max_cards limit")
         if not added and updated:
             lines.append("  nothing new: the board already had this change, its text is now current")
+        if not parsed["requirements"] and not parsed["tasks"]:
+            # a change with only a proposal is a real thing in a real project: somebody created it
+            # and has not written its artifacts yet. the epic is worth having, the story is that
+            # the stories are not there yet
+            lines.append("  note: this change only has a proposal so far, so the epic is all the "
+                         "board can hold - its stories appear once it has requirements or tasks")
         lines.extend(f"  note: {note}" for note in notes)
         lines.append(f"  the cards carry the '{OPENSPEC_LABEL}/{change_id}' label, and ticked tasks "
                      "follow tasks.md - never the other way round")
@@ -3108,7 +3162,16 @@ class ProjectBoard(core.module.Module):
     async def read_openspec(self, change: str = None, root: str = None, show_tasks: bool = False):
         """Reads the OpenSpec changes that are in flight and how they relate to the board: what is
         specified, how much of it is already on the board, and which requirements are not testable
-        yet because they have no scenario. Read-only - it answers 'what is still unplanned?'"""
+        yet because they have no scenario. Read-only - it answers 'what is still unplanned?'
+
+        Args:
+            change: one change id to look at closely (its requirements, which of them are on the
+                board, which have no scenario). Leave it out for the list of everything in flight
+            root: which configured openspec_roots entry to read, when there is more than one
+            show_tasks: also list the tasks.md checklist under that change. Off by default because
+                a big change's checklist would bury the requirements; it comes on by itself when
+                the change has no requirements at all
+        """
         self._reload()
 
         problem = self._openspec_ready()
@@ -3156,7 +3219,8 @@ class ProjectBoard(core.module.Module):
                              f"({requirement['kind']}, {scenarios} scenario(s)"
                              + (", NOT TESTABLE YET" if not scenarios else "") + ")")
 
-            if show_tasks or not parsed["requirements"]:
+            listed_tasks = show_tasks or not parsed["requirements"]
+            if listed_tasks:
                 for task in parsed["tasks"]:
                     source = (f"openspec:{parsed['id']}#task:"
                               f"{task.get('number') or _labelify(task['title'], 40)}")
@@ -3165,7 +3229,24 @@ class ProjectBoard(core.module.Module):
                                  f"-> {sources.get(source, 'not on the board')}")
 
             if not parsed["requirements"] and not parsed["tasks"]:
-                lines.append("  nothing here yet: no requirements and no tasks")
+                lines.append("  nothing here yet: no requirements, no tasks and no proposal, so "
+                             "there is no card to be had from this change")
+
+            # the question this tool gets asked is 'what is still unplanned', so answer it instead
+            # of making the model count lines
+            planned = len([r for r in parsed["requirements"]
+                           if sources.get(f"openspec:{parsed['id']}#req:"
+                                          f"{r.get('capability') or 'spec'}:{_labelify(r['name'], 40)}")])
+            no_scenario = len([r for r in parsed["requirements"] if not r["scenarios"]])
+            lines.append(f"  on this board: {planned}/{len(parsed['requirements'])} requirement(s)"
+                         + (f", {len([t for t in parsed['tasks'] if sources.get(
+                                f"openspec:{parsed['id']}#task:"
+                                f"{t.get('number') or _labelify(t['title'], 40)}")])}"
+                               f"/{len(parsed['tasks'])} task(s)" if listed_tasks and parsed["tasks"] else "")
+                         + (f", {no_scenario} without a scenario" if no_scenario else "")
+                         + (f", {on_board.get(parsed['id'], 0)} card(s) carrying the "
+                            f"'{OPENSPEC_LABEL}/{parsed['id']}' label" if on_board.get(parsed['id'])
+                            else ", nothing on this board yet"))
 
             return self.result("\n".join(lines))
 
@@ -3262,6 +3343,16 @@ class ProjectBoard(core.module.Module):
         board should not touch your project, the strip asks for the changes when you open it"""
         roots = self._openspec_roots()
         problem = self._openspec_ready()
+
+        if not problem and not roots:
+            # the one state a newcomer hits first, so say what to do about it instead of just
+            # saying "not configured" - there is nowhere else in the UI that explains this
+            problem = ("no openspec folder is configured yet. set openspec_roots to the repository "
+                       "that contains openspec/, or straight to an openspec folder, and reload this "
+                       "strip - until then the board has nowhere it is allowed to read from")
+        elif not problem and not any(self._openspec_base(absolute) for _shown, absolute in roots):
+            problem = ("none of the configured openspec_roots hold an openspec/changes folder yet: "
+                       + ", ".join(shown for shown, _absolute in roots))
 
         return {
             "enabled": bool(self.config.get("enable_openspec", True)),

@@ -1074,13 +1074,23 @@ body.pb-board-open.pb-hide-input.pb-input-peek #chat-window > #input {
     font-size: 0.75rem;
 }
 
+/* one project had thirty changes in flight when the strip was built with three in it, and the
+   list then pushed the whole board off the bottom of the panel. the list scrolls, the note about
+   what the strip does does not */
+.pb-openspec-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 32vh;
+    overflow-y: auto;
+}
+
 .pb-openspec-row {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
     gap: 8px;
 }
-
 .pb-openspec-id {
     font-weight: 600;
     color: var(--text-primary);
@@ -1280,6 +1290,15 @@ body.pb-board-open.pb-hide-input.pb-input-peek #chat-window > #input {
     font-size: 0.74rem;
     color: var(--info);
 }
+/* the "this board cannot land the stories yet" line: same shape as the warning above it, but
+   muted, because it is about the setup rather than about what the user just pasted */
+.pb-spec-note {
+    margin: 6px 0 0;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    line-height: 1.45;
+}
+
 
 .pb-spec-preview {
     max-height: 18rem;
