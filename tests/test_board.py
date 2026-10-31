@@ -1869,3 +1869,173 @@ async def test_an_action_cannot_point_at_a_column_that_is_not_there(board):
 
     entry = next(item for item in board.actions if item["id"] == identifier)
     assert entry["move_to"] == review and entry["log_as_comment"] is True
+
+
+# --------------------------------------------------------------------------- more than one repo
+
+def two_projects(root):
+    """two separate openspec projects, which is the whole reason openspec_roots is a list.
+    returns (root_path, [project_a, project_b]) with one shared change name on purpose, because
+    that is the case a tool must not guess about"""
+    import shutil
+
+    first = root / "frontend"
+    second = root / "backend"
+    shutil.copytree(OPENSPEC_FOLDER, first / "openspec")
+
+    (second / "openspec/changes/quiet-hours").mkdir(parents=True)
+    (second / "openspec/changes/fix-login").mkdir(parents=True)
+    (second / "openspec/specs").mkdir()
+
+    (second / "openspec/changes/quiet-hours/proposal.md").write_text(
+        "## Why\n\nNotifications at night are rude.\n")
+    (second / "openspec/changes/quiet-hours/tasks.md").write_text(
+        "## 1. Quiet hours\n\n- [ ] 1.1 Add the window to the settings model\n")
+    (second / "openspec/changes/fix-login/proposal.md").write_text(
+        "## Why\n\nThe backend one.\n")
+
+    # the same change name in the first project, so ambiguity is on the table
+    (first / "openspec/changes/fix-login").mkdir()
+    (first / "openspec/changes/fix-login/proposal.md").write_text("## Why\n\nThe frontend one.\n")
+
+    return first, second
+
+
+async def test_a_second_root_is_not_invisible_just_because_another_came_first(isolated_paths):
+    """the strip used to stop at the first project that had changes, which made the second repo
+    unreachable from the panel even though the tools could read it"""
+    first, second = two_projects(isolated_paths)
+    board = await build(openspec_roots=[str(first), str(second)])
+
+    state = await board._route_openspec_changes()
+    listed = {entry["id"]: entry for entry in state["changes"]}
+
+    assert len(state["bases"]) == 2, "both projects are read"
+    assert "quiet-hours" in listed, "the second project's change is offered"
+    assert listed["quiet-hours"]["root"] == str(second)
+    assert listed["quiet-hours"]["root_name"] == "backend"
+    assert listed["add-dark-mode"]["root_name"] == "frontend"
+    assert listed["quiet-hours"]["requirements"] == 0 and listed["quiet-hours"]["tasks"] == 1
+
+
+async def test_a_change_in_the_second_project_can_be_landed_by_name_alone(isolated_paths):
+    first, second = two_projects(isolated_paths)
+    board = await build(openspec_roots=[str(first), str(second)])
+
+    result = await board.import_openspec(change="quiet-hours")
+
+    assert result["status"] == "success", result["content"]
+    assert "(from backend)" in result["content"], result["content"].splitlines()[0]
+    assert str(second) not in result["content"], "a name the user recognises, not their path"
+
+    cards = [card for card in board.cards if card["type"] == "epic"]
+    assert any("quiet-hours" in card["title"] for card in cards)
+
+
+async def test_a_change_name_two_projects_share_is_refused_not_guessed(isolated_paths):
+    first, second = two_projects(isolated_paths)
+    board = await build(openspec_roots=[str(first), str(second)])
+
+    imported = await board.import_openspec(change="fix-login")
+    assert imported["status"] == "error"
+    assert "more than one" in imported["content"] and "root=" in imported["content"]
+    assert "frontend, backend" in imported["content"], "the refusal names them the way you do"
+
+    read = await board.read_openspec(change="fix-login")
+    assert read["status"] == "error", "the same rule for reading as for writing"
+
+    # naming the root settles it, and the two are clearly told apart
+    picked = await board.import_openspec(change="fix-login", root=str(second))
+    assert picked["status"] == "success", picked["content"]
+    assert "backend" in picked["content"]
+
+    report = await board.read_openspec(change="fix-login", root="backend")
+    assert report["status"] == "success" and "backend" in report["content"]
+
+
+async def test_the_listing_covers_every_project_and_says_so(isolated_paths):
+    first, second = two_projects(isolated_paths)
+    board = await build(openspec_roots=[str(first), str(second)])
+
+    report = await board.read_openspec()
+
+    assert "across 2 roots" in report["content"]
+    assert "frontend:" in report["content"] and "backend:" in report["content"]
+    assert "quiet-hours" in report["content"] and "add-dark-mode" in report["content"]
+    assert "name it with root=" in report["content"]
+
+
+async def test_naming_a_root_you_do_not_have_is_refused(isolated_paths):
+    first, second = two_projects(isolated_paths)
+    board = await build(openspec_roots=[str(first), str(second)])
+
+    unknown = await board.import_openspec(change="quiet-hours", root="whatever")
+    assert unknown["status"] == "error" and "openspec_roots does not include" in unknown["content"]
+
+    # a configured root that is not a project says so, rather than reporting an empty listing
+    board = await build(openspec_roots=[str(first), str(isolated_paths)])
+    narrow = await board.import_openspec(change="add-dark-mode", root=str(isolated_paths))
+    assert narrow["status"] == "error" and "no openspec/changes folder inside it" in narrow["content"]
+
+
+async def test_two_roots_with_the_same_folder_name_fall_back_to_the_path(isolated_paths):
+    """two clones of one repo in different folders - common with git worktrees - have the same
+    folder name, and then the only thing that tells them apart is the path someone configured"""
+    import shutil
+
+    first, second = two_projects(isolated_paths)
+    twin = isolated_paths / "other" / "backend"
+    twin.parent.mkdir()
+    shutil.copytree(second, twin)
+
+    board = await build(openspec_roots=[str(first), str(second), str(twin)])
+    report = await board.read_openspec(change="fix-login")
+
+    assert report["status"] == "error"
+    assert str(second) in report["content"] and str(twin) in report["content"], report["content"]
+
+
+async def test_switching_the_feature_off_also_stops_the_writing(isolated_paths):
+    """the setting promises to hide the play buttons, and a tool that kept writing them while the
+    user had them hidden would leave invisible settings nobody knows are there"""
+    board = await build(enable_prompt_actions=False)
+
+    for call in [board.add_prompt_action("Ship it", "ship {id}"),
+                 board.edit_prompt_action("whatever", name="x"),
+                 board.delete_prompt_action("whatever")]:
+        refused = await call
+        assert refused["status"] == "error" and "switched off" in refused["content"]
+
+    assert board.actions == [], "nothing half-configured is waiting for the switch to come back"
+
+    # reading is still fine: the panel and the AI both need to know the buttons are off, not that
+    # something is broken
+    assert (await board.list_prompt_actions())["status"] == "success"
+    assert board._ui_board()["settings"]["enable_prompt_actions"] is False
+    assert (await board._route_actions_list())["actions"] == []
+
+    # the panel's save route delegates to the tools, so it is covered by the same guard
+    assert (await board._route_action_save({"name": "x", "template": "y"}))["status"] == "error"
+
+
+async def test_a_press_cannot_be_made_while_the_feature_is_off(board):
+    """a press is the user's gesture; with the buttons hidden there is no gesture to honour, so the
+    side effects (moving the card, logging a comment) do not happen behind their back either"""
+    import core
+
+    await add(board, "Add the toggle")
+    identifier = await action(board, name="Ship it", template="ship {id}",
+                              move_to="Done", log_as_comment=True)
+
+    core.config.config.load({
+        "core": {"data_folder": str(board.card_store.path).rsplit("/", 1)[0]},
+        "modules": {"settings": {"project-board": {"enable_prompt_actions": False}}},
+    })
+
+    refused = await board._play_action(identifier, board.cards[0]["id"])
+    assert refused["status"] == "error" and "switched off" in refused["content"]
+
+    launched = await board._action_launched(identifier, board.cards[0]["id"], prompt="ship it")
+    assert launched["status"] == "error"
+    assert board.cards[0]["column"] == column(board, "Backlog")["id"], "the card did not move"
+    assert not board.cards[0].get("comments"), "and nothing was logged"

@@ -1100,6 +1100,15 @@ body.pb-board-open.pb-hide-input.pb-input-peek #chat-window > #input {
     flex: 1;
     color: var(--text-muted);
 }
+/* which repo a row came from, shown only when more than one root is being read */
+.pb-openspec-root {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    padding: 1px 6px;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+}
+
 
 .pb-openspec-problem,
 .pb-openspec-note {

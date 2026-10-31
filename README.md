@@ -125,6 +125,11 @@ instead of retyping it.
   kept in full in that card's description, so nothing is lost and nothing needs scrolling sideways
 - `read_openspec` ends with the answer instead of a raw list: `on this board: 3/4 requirement(s),
   1 without a scenario`
+- `openspec_roots` is a list because people have more than one repo: every folder in it that
+  holds an `openspec/changes` is read, the strip shows them all and labels each row with its
+  project once more than one is in play, and a change in your second repo can be imported by name
+  alone. Two repos with a change of the same name are *reported*, never guessed about (`root=`
+  settles it), and messages name the project by its folder rather than dumping your path
 - **strictly read-only.** The module parses OpenSpec's markdown, never runs the `openspec` CLI and
   never writes into your project — ticking a box in `tasks.md` stays the job of whatever module
   you edit code with. Only the folders in `openspec_roots` can be read at all, the archive folder
@@ -205,7 +210,7 @@ header; on other channels (`/board`, cli, telegram, …) the tools and the comma
 | `default_board_name` | `General` | Name of the board created the first time the module runs, and the name the first project gets when it takes over board-less storage from an older install |
 | `default_columns` | `Backlog, To Do, In Progress, Done` | The column layout every new board starts out with. A column named Done, Closed, Complete or Completed counts as finished work. Changing it later does not touch existing boards |
 | `keep_chat_input` | `true` | Keep the chat input bar visible while the board is open, so you can tell your AI to change the board without leaving it. Off = full-screen board |
-| `enable_prompt_actions` | `true` | The play buttons and the action editor. Off hides them; your templates stay on the board. Even on, a press only fills the chat input — nothing is sent for you |
+| `enable_prompt_actions` | `true` | The play buttons and the action editor. Off hides them and nothing writes them either - the panel's save route and the AI's tools both refuse, and your templates stay on the board. Even on, a press only fills the chat input — nothing is sent for you |
 | `spec_action_prompt` | *(the OpenSpec-shaped prompt)* | What the process-spec button fills into the chat, with the pasted spec in it. Placeholders `{title}`, `{spec}`, `{board}`, `{backlog}`, `{date}`. Rewrite it if your project plans differently |
 | `enable_openspec` | `true` | Read `openspec/changes/<change>/` and turn it into cards. The board never writes to your project and never runs the openspec CLI |
 | `openspec_roots` | *(empty)* | The folders your OpenSpec projects live in: the repository root that contains `openspec/`, or an `openspec` folder itself — same shape as the coder module's `sandbox_paths`. Nothing outside this list is ever read, so the feature sleeps until you point it at a repo - and until then the panel says so out loud and names this setting |

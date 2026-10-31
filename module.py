@@ -2501,6 +2501,10 @@ class ProjectBoard(core.module.Module):
             log_as_comment: also leave the rendered prompt on the card as a comment, so there is a
                 trail of what each press did
         """
+
+        problem = self._prompt_actions_off()
+        if problem:
+            return self.result(problem, success=False)
         self._reload()
 
         if not self.board:
@@ -2559,6 +2563,10 @@ class ProjectBoard(core.module.Module):
             order: swap places with the action sitting at this zero-based position, which is how
                 you put the button the user presses most in front
         """
+
+        problem = self._prompt_actions_off()
+        if problem:
+            return self.result(problem, success=False)
         self._reload()
 
         index, problem = self._action(action)
@@ -2623,6 +2631,10 @@ class ProjectBoard(core.module.Module):
         Args:
             action: the action's id, or its name (an unambiguous part of the name works too)
         """
+
+        problem = self._prompt_actions_off()
+        if problem:
+            return self.result(problem, success=False)
         self._reload()
 
         index, problem = self._action(action)
@@ -2659,10 +2671,23 @@ class ProjectBoard(core.module.Module):
 
         return ""
 
+    def _prompt_actions_off(self):
+        """prompt actions are the user's to switch off, and then nothing should be writing them:
+        not the panel, which hides the editor, and not the AI, which still has the tools"""
+        if not self.config.get("enable_prompt_actions", True):
+            return ("prompt actions are switched off in the project-board settings, so there are "
+                    "no play buttons to configure - the user can turn them back on in the settings")
+
+        return ""
+
     async def _play_action(self, action_ref, card_ref):
         """what the panel's play button does: render the template for the card, then apply the
         side effects the action was configured with. filling the chat input is the browser's job -
         a tool call never starts a turn, and neither does a button here"""
+
+        problem = self._prompt_actions_off()
+        if problem:
+            return self.result(problem, success=False)
         self._reload()
 
         index, problem = self._card(card_ref)
@@ -2691,6 +2716,10 @@ class ProjectBoard(core.module.Module):
     async def _action_launched(self, action_ref, card_ref, prompt=None):
         """the second half of a press: the side effects the action configures, recorded at the
         moment the button was pressed rather than when the message eventually gets sent"""
+
+        problem = self._prompt_actions_off()
+        if problem:
+            return self.result(problem, success=False)
         self._reload()
 
         index, problem = self._card(card_ref)
@@ -2803,6 +2832,68 @@ class ProjectBoard(core.module.Module):
             return absolute
 
         return ""
+
+    def _openspec_projects(self):
+        """every configured root that turns out to hold an openspec project, as
+        [(as configured, absolute, openspec folder)].
+
+        more than one is the whole reason the setting is a list - a frontend repo and a backend
+        one, say - so nothing in here may treat the first root as 'the project'.
+        """
+        projects = []
+
+        for shown, absolute in self._openspec_roots():
+            base = self._openspec_base(absolute)
+            if base:
+                projects.append((shown, absolute, base))
+
+        return projects
+
+    def _openspec_targets(self, root=None):
+        """(projects, problem) for one call. with no root named it is every project that is
+        configured; naming one narrows the list to that entry, which is how a second repo stops
+        being invisible just because another one is listed first"""
+        projects = self._openspec_projects()
+
+        if root:
+            _shown, absolute, problem = self._openspec_root(root)
+            if problem:
+                return [], problem
+
+            projects = [entry for entry in projects if entry[1] == absolute]
+            if not projects:
+                return [], (f"'{root}' is configured in openspec_roots, but there is no "
+                            "openspec/changes folder inside it")
+
+        if not projects:
+            return [], (self._openspec_ui_state()["problem"]
+                        or "none of the configured openspec_roots holds an openspec project")
+
+        return projects, ""
+
+    def _openspec_label(self, project, projects):
+        """the project's name for messages and rows: the folder it lives in, which is what a
+        person recognises, falling back to the path they configured when two roots share a name"""
+        name = os.path.basename(os.path.dirname(project[2])) or os.path.basename(project[2])
+        names = [os.path.basename(os.path.dirname(entry[2])) for entry in projects]
+
+        return name if names.count(name) == 1 else project[0]
+
+    def _openspec_find(self, projects, change):
+        """every project that has a change matching this name, as [(project, change_id)].
+
+        answered across all of them so a change in the second repo can be imported by name alone,
+        and so two repos with a change of the same name are reported instead of guessed about.
+        """
+        matches = []
+
+        for project in projects:
+            ids = self._openspec_change_ids(project[2])
+            index, _problem = self._lookup([{"id": entry} for entry in ids], change, "id")
+            if index >= 0:
+                matches.append((project, ids[index]))
+
+        return matches
 
     def _openspec_read(self, base, relative):
         """one file inside a root, through the same sandboxed open the skills module uses.
@@ -3055,30 +3146,56 @@ class ProjectBoard(core.module.Module):
         if problem:
             return self.result(problem, success=False)
 
-        _shown, absolute, problem = self._openspec_root(root)
+        projects, problem = self._openspec_targets(root)
         if problem:
             return self.result(problem, success=False)
 
-        base = self._openspec_base(absolute)
-        if not base:
-            return self.result("there is no openspec/changes folder to read from that root",
-                               success=False)
+        # no root named means "the project I am working on", which is the first one. the others are
+        # reachable by name as well, and a name that matches two of them is refused below
+        _shown, _absolute, base = projects[0]
 
         ids = self._openspec_change_ids(base)
         if not ids:
             return self.result(f"{base} has no changes in flight - openspec/changes is empty, so "
-                               "there is nothing to import yet", success=False)
+                               "there is nothing to import yet"
+                               + (f". your other roots: "
+                                  + ", ".join(f"{self._openspec_label(entry, projects)} "
+                                              f"({len(self._openspec_change_ids(entry[2]))} change(s))"
+                                              for entry in projects[1:])
+                                  if len(projects) > 1 else ""), success=False)
 
         if change:
-            index, problem = self._lookup([{"id": entry} for entry in ids], change, "id")
-            if index < 0:
+            matches = self._openspec_find(projects, change)
+            if not matches:
                 return self.result(f"no openspec change matching '{change}' "
-                                   f"(in flight: {', '.join(ids)})", success=False)
-            change_id = ids[index]
+                                   f"(in flight: {', '.join(ids)}"
+                                   + (f" in {base}; other roots: "
+                                      + ", ".join(f"{self._openspec_label(entry, projects)} has "
+                                                  f"{', '.join(self._openspec_change_ids(entry[2])) or 'none'}"
+                                                  for entry in projects[1:])
+                                      if len(projects) > 1 else "") + ")", success=False)
+            if len(matches) > 1:
+                return self.result(f"'{change}' is in flight in more than one of your "
+                                   f"openspec_roots ({', '.join(self._openspec_label(entry, projects)
+                                                                 for entry, _id in matches)}) "
+                                   "- say which one with root=", success=False)
+
+            project, change_id = matches[0]
+            base = project[2]
+            # name the repo the cards came from whenever more than one is configured, including
+            # when the caller narrowed it themselves - "which one did I just land?" is answered
+            # by the message rather than by scrolling back through the settings
+            root_note = (f" (from {self._openspec_label(project, self._openspec_projects())})"
+                         if len(self._openspec_projects()) > 1 else "")
         elif len(ids) == 1:
             change_id = ids[0]
+            root_note = ""
         else:
-            return self.result(f"several changes are in flight, which one? ({', '.join(ids)})", success=False)
+            return self.result(f"several changes are in flight in {base}, which one? "
+                               f"({', '.join(ids)})"
+                               + (f" - there are {sum(len(self._openspec_change_ids(entry[2])) for entry in projects[1:])} "
+                                  "more in your other roots, name one with root="
+                                  if len(projects) > 1 else ""), success=False)
 
         unit = _slug(unit) or _slug(self.config.get("openspec_default_unit")) or "requirements"
         if unit not in OPENSPEC_UNITS:
@@ -3117,8 +3234,8 @@ class ProjectBoard(core.module.Module):
         fresh = len([entry for entry in plan if entry["source"] not in sources])
 
         if dry_run:
-            lines = [f"openspec/changes/{change_id} as {unit} into {target['name']} "
-                     f"(nothing written yet):", f"  {fresh} new card(s), "
+            lines = [f"openspec/changes/{change_id} as {unit} into {target['name']}"
+                     f"{root_note} (nothing written yet):", f"  {fresh} new card(s), "
                      f"{len(plan) - fresh} already on the board would be refreshed"]
             for entry in plan[:20]:
                 mark = "=" if entry["source"] in sources else "+"
@@ -3136,8 +3253,8 @@ class ProjectBoard(core.module.Module):
             self._save()
             self.broadcast_board("cards_imported")
 
-        lines = [f"imported openspec/changes/{change_id} ({unit}) into {target['name']}: "
-                 f"{len(added)} card(s) added, {len(updated)} refreshed"]
+        lines = [f"imported openspec/changes/{change_id} ({unit}) into {target['name']}"
+                 f"{root_note}: {len(added)} card(s) added, {len(updated)} refreshed"]
         for card in added[:20]:
             lines.append(f"  [{card['id']}] {card['title']}")
         if len(added) > 20:
@@ -3178,17 +3295,12 @@ class ProjectBoard(core.module.Module):
         if problem:
             return self.result(problem, success=False)
 
-        _shown, absolute, problem = self._openspec_root(root)
+        projects, problem = self._openspec_targets(root)
         if problem:
             return self.result(problem, success=False)
 
-        base = self._openspec_base(absolute)
-        if not base:
-            return self.result("there is no openspec/changes folder to read from that root", success=False)
-
+        _shown, _absolute, base = projects[0]
         ids = self._openspec_change_ids(base)
-        if not ids:
-            return self.result(f"{base} has no changes in flight", success=False)
 
         on_board = {}
         for card in self.cards:
@@ -3197,15 +3309,26 @@ class ProjectBoard(core.module.Module):
                 on_board[change_of] = on_board.get(change_of, 0) + 1
 
         if change:
-            index, problem = self._lookup([{"id": entry} for entry in ids], change, "id")
-            if index < 0:
+            matches = self._openspec_find(projects, change)
+            if not matches:
                 return self.result(f"no openspec change matching '{change}' "
                                    f"(in flight: {', '.join(ids)})", success=False)
+            if len(matches) > 1:
+                return self.result(f"'{change}' is in flight in more than one of your "
+                                   f"openspec_roots ({', '.join(self._openspec_label(entry, projects)
+                                                                 for entry, _id in matches)}) "
+                                   "- say which one with root=", success=False)
 
-            parsed = self._openspec_change(base, ids[index])
+            project, _change_id = matches[0]
+            base = project[2]
+            several = len(self._openspec_projects()) > 1
+
+            parsed = self._openspec_change(base, _change_id)
             sources = {card.get("source"): card["id"] for card in self.cards if card.get("source")}
 
             lines = [f"openspec/changes/{parsed['id']}"
+                     + (f" (in {self._openspec_label(project, self._openspec_projects())})"
+                        if several else "")
                      + (" (skip_specs)" if parsed["skip_specs"] else "")
                      + f" - capabilities: {', '.join(parsed['capabilities']) or 'none'}"
                      + (", design.md present" if parsed["has_design"] else "")]
@@ -3250,22 +3373,30 @@ class ProjectBoard(core.module.Module):
 
             return self.result("\n".join(lines))
 
-        lines = [f"openspec changes in flight in {base}:"]
+        lines = ["openspec changes in flight"
+                 + (f" across {len(projects)} roots" if len(projects) > 1 else f" in {base}") + ":"]
 
-        for change_id in ids:
-            parsed = self._openspec_change(base, change_id)
-            checked = len([task for task in parsed["tasks"] if task["done"]])
-            untestable = len([requirement for requirement in parsed["requirements"]
-                              if not requirement["scenarios"]])
+        for project in projects:
+            if len(projects) > 1:
+                lines.append(f"  {self._openspec_label(project, projects)}:")
 
-            lines.append(f"  {change_id} - {len(parsed['requirements'])} requirement(s), "
-                         f"{checked}/{len(parsed['tasks'])} tasks checked off, "
-                         f"{on_board.get(change_id, 0)} card(s) on this board"
-                         + (f", {untestable} requirement(s) without a scenario" if untestable else ""))
+            for change_id in self._openspec_change_ids(project[2]):
+                parsed = self._openspec_change(project[2], change_id)
+                checked = len([task for task in parsed["tasks"] if task["done"]])
+                untestable = len([requirement for requirement in parsed["requirements"]
+                                  if not requirement["scenarios"]])
+
+                lines.append(f"  {'  ' if len(projects) > 1 else ''}{change_id} - "
+                             f"{len(parsed['requirements'])} requirement(s), "
+                             f"{checked}/{len(parsed['tasks'])} tasks checked off, "
+                             f"{on_board.get(change_id, 0)} card(s) on this board"
+                             + (f", {untestable} requirement(s) without a scenario"
+                                if untestable else ""))
 
         lines.append("")
         lines.append("import one with import_openspec - it reads these files rather than your "
-                     "memory of them, and re-running it refreshes the cards instead of duplicating")
+                     "memory of them, and re-running it refreshes the cards instead of duplicating"
+                     + (". with more than one root, name it with root=" if len(projects) > 1 else ""))
 
         return self.result("\n".join(lines))
 
@@ -3652,24 +3783,27 @@ class ProjectBoard(core.module.Module):
             payload["problem"] = state["problem"] or "no openspec folder is configured for this module"
             return payload
 
-        for _shown, absolute in self._openspec_roots():
-            base = self._openspec_base(absolute)
-            if not base:
-                continue
+        projects, problem = self._openspec_targets()
+        if problem:
+            return payload | {"problem": problem}
 
-            on_board = {}
-            for card in self.cards:
-                change_of = _openspec_change_of(card)
-                if change_of:
-                    on_board[change_of] = on_board.get(change_of, 0) + 1
+        on_board = {}
+        for card in self.cards:
+            change_of = _openspec_change_of(card)
+            if change_of:
+                on_board[change_of] = on_board.get(change_of, 0) + 1
 
+        for shown, absolute, base in projects:
             for change_id in self._openspec_change_ids(base):
                 parsed = self._openspec_change(base, change_id)
                 checked = len([task for task in parsed["tasks"] if task["done"]])
 
                 payload["changes"].append({
                     "id": change_id,
-                    "root": _shown,
+                    "root": shown,
+                    # which repo the row came from, which only matters once more than one is
+                    # being read - a single project should not litter its own rows with its name
+                    "root_name": self._openspec_label((shown, absolute, base), projects),
                     "capabilities": parsed["capabilities"],
                     "requirements": len(parsed["requirements"]),
                     "untestable": len([requirement for requirement in parsed["requirements"]
@@ -3680,11 +3814,13 @@ class ProjectBoard(core.module.Module):
                     "skip_specs": parsed["skip_specs"],
                 })
 
-            payload["base"] = base
-            break
+        payload["bases"] = [base for _shown, _absolute, base in projects]
+        payload["base"] = payload["bases"][0]
 
         if not payload["changes"]:
-            payload["problem"] = "no changes in flight in the configured openspec folder"
+            payload["problem"] = ("no changes in flight in "
+                                  + ", ".join(payload["bases"]) + " - openspec/changes is empty, "
+                                  "so there is nothing to land yet")
 
         return payload
 

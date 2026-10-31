@@ -196,6 +196,10 @@
         <template x-for="change in openspec.changes" :key="change.id">
             <div class="pb-openspec-row">
                 <span class="pb-openspec-id" x-text="change.id"></span>
+                <span class="pb-openspec-root"
+                      x-show="openspec.bases && openspec.bases.length > 1"
+                      x-text="change.root_name"
+                      title="which of your openspec_roots this change lives in"></span>
                 <span class="pb-openspec-meta"
                       :title="'requirements with no scenario cannot be checked off against anything yet'"
                       x-text="[
