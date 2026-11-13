@@ -4,12 +4,22 @@
  */
 /* -- AI-GENERATED CODE (Qwen3.8 Flash Next) :: (2026-10-26) status:reviewed harness:openlumara --
    Kanban / scrum board panel: takes over the chat panel, drag & drop, filtering and the
-   card + column editors. Talks to /api/ext/project-board/ and to the module's
+   card + column editors. Talks to the module's /api/ext routes and to its
    {type: "project_board"} websocket broadcasts. */
 
 /* the interval auto-refresh starts out with, and what the panel falls back to when the
    number in the status bar is not usable. board changes are pushed over the websocket, so
    the timer is the safety net for anything the push missed - and it is optional */
+/* -- AI GENERATED CODE (unknown model) :: (2026-11-12) status:pending-review harness:openlumara --
+   /api/ext is namespaced by the folder name the module was installed under, which is not
+   something the repo can know (upstream ships it as openlumara-project-board, but any folder
+   name works). this file is served from /ext-assets/<that name>/js/, so ask it. */
+const PB_API = (() => {
+    const here = document.currentScript || document.querySelector("script[src*='/js/project_board.js']");
+    const served_from = /\/ext-assets\/([^/]+)\//.exec(here ? here.src : "");
+    return `/api/ext/${served_from ? served_from[1] : "openlumara-project-board"}/`;
+})();
+
 const PB_REFRESH_SECONDS = 5;
 
 const PROJECT_BOARD = {
@@ -324,7 +334,7 @@ const PROJECT_BOARD = {
         this.error = "";
 
         try {
-            const board = await simpleApiFetch("/api/ext/project-board/board");
+            const board = await simpleApiFetch(`${PB_API}board`);
 
             this.columns = board.columns || [];
             this.cards = board.cards || [];
@@ -407,7 +417,7 @@ const PROJECT_BOARD = {
         }
 
         try {
-            await simpleApiPost("/api/ext/project-board/board/activate", { id: id });
+            await simpleApiPost(`${PB_API}board/activate`, { id: id });
         } catch (e) {
             this.error = this.errorText(e);
         } finally {
@@ -432,7 +442,7 @@ const PROJECT_BOARD = {
         if (!name) return (this.creatingBoard = false);
 
         try {
-            await simpleApiPost("/api/ext/project-board/board/create", {
+            await simpleApiPost(`${PB_API}board/create`, {
                 name: name,
                 description: this.newBoardDescription.trim(),
                 like: this.copyLayout ? this.activeBoardId : null,
@@ -459,7 +469,7 @@ const PROJECT_BOARD = {
         if (!board) return;
 
         try {
-            await simpleApiPost("/api/ext/project-board/board/update", {
+            await simpleApiPost(`${PB_API}board/update`, {
                 id: board.id,
                 name: this.boardDraft.name.trim(),
                 description: this.boardDraft.description,
@@ -483,7 +493,7 @@ const PROJECT_BOARD = {
         if (!confirm(warning)) return;
 
         try {
-            await simpleApiPost("/api/ext/project-board/board/delete", { id: board.id, force: true });
+            await simpleApiPost(`${PB_API}board/delete`, { id: board.id, force: true });
 
             this.showBoardSettings = false;
             await this.load();
@@ -821,7 +831,7 @@ const PROJECT_BOARD = {
 
     async moveCard(cardId, columnId, beforeId = null) {
         try {
-            const result = await simpleApiPost("/api/ext/project-board/card/move", {
+            const result = await simpleApiPost(`${PB_API}card/move`, {
                 id: cardId,
                 column: columnId,
                 before_card: beforeId,
@@ -866,7 +876,7 @@ const PROJECT_BOARD = {
 
     async reorder(columnId, cardIds) {
         try {
-            await simpleApiPost("/api/ext/project-board/card/reorder", { column: columnId, card_ids: cardIds });
+            await simpleApiPost(`${PB_API}card/reorder`, { column: columnId, card_ids: cardIds });
             await this.load();
         } catch (e) {
             this.error = this.errorText(e);
@@ -885,7 +895,7 @@ const PROJECT_BOARD = {
         if (!title) return (this.quickAdd = null);
 
         try {
-            await simpleApiPost("/api/ext/project-board/card/create", { title: title, column: columnId });
+            await simpleApiPost(`${PB_API}card/create`, { title: title, column: columnId });
             this.quickAdd = { column: columnId, text: "" };
             await this.load();
         } catch (e) {
@@ -971,17 +981,17 @@ const PROJECT_BOARD = {
             if (this.editing && this.editing.id) {
                 const before = this.cardById(this.editing.id);
 
-                await simpleApiPost("/api/ext/project-board/card/update", { ...payload, id: this.editing.id });
+                await simpleApiPost(`${PB_API}card/update`, { ...payload, id: this.editing.id });
 
                 // a column change goes through the move endpoint, which also keeps
                 // the wip limit warnings coming from one place
                 if (before && this.form.column !== before.column) {
-                    await simpleApiPost("/api/ext/project-board/card/move", {
+                    await simpleApiPost(`${PB_API}card/move`, {
                         id: this.editing.id, column: this.form.column,
                     });
                 }
             } else {
-                await simpleApiPost("/api/ext/project-board/card/create", { ...payload, column: this.form.column });
+                await simpleApiPost(`${PB_API}card/create`, { ...payload, column: this.form.column });
             }
 
             await this.load();
@@ -997,7 +1007,7 @@ const PROJECT_BOARD = {
         if (!window.confirm(`Delete the card "${card.title}" and its comments?`)) return;
 
         try {
-            await simpleApiPost("/api/ext/project-board/card/delete", { id: card.id });
+            await simpleApiPost(`${PB_API}card/delete`, { id: card.id });
             await this.load();
 
             if (this.editing && this.editing.id === card.id) this.closeModal();
@@ -1008,7 +1018,7 @@ const PROJECT_BOARD = {
 
     async duplicateCard(card) {
         try {
-            await simpleApiPost("/api/ext/project-board/card/duplicate", { id: card.id });
+            await simpleApiPost(`${PB_API}card/duplicate`, { id: card.id });
             await this.load();
             this.closeModal();
         } catch (e) {
@@ -1021,7 +1031,7 @@ const PROJECT_BOARD = {
         if (!text) return;
 
         try {
-            await simpleApiPost("/api/ext/project-board/comment/add", { id: card.id, text: text });
+            await simpleApiPost(`${PB_API}comment/add`, { id: card.id, text: text });
             this.commentText = "";
             await this.load();
             this.editing = { id: card.id };
@@ -1033,7 +1043,7 @@ const PROJECT_BOARD = {
 
     async deleteComment(card, comment) {
         try {
-            await simpleApiPost("/api/ext/project-board/comment/delete", { id: card.id, comment: comment.id });
+            await simpleApiPost(`${PB_API}comment/delete`, { id: card.id, comment: comment.id });
             await this.load();
             this.comments = (this.cardById(card.id) || {}).comments || [];
         } catch (e) {
@@ -1551,7 +1561,7 @@ Add them to the board? The files are never written to.`)) return;
         if (!name) return (this.newColumn.adding = false);
 
         try {
-            await simpleApiPost("/api/ext/project-board/column/create", { name: name });
+            await simpleApiPost(`${PB_API}column/create`, { name: name });
             this.newColumn = { name: "", adding: false };
             await this.load();
         } catch (e) {
@@ -1572,7 +1582,7 @@ Add them to the board? The files are never written to.`)) return;
         if (!name || name === column.name) return;
 
         try {
-            await simpleApiPost("/api/ext/project-board/column/update", { id: column.id, name: name });
+            await simpleApiPost(`${PB_API}column/update`, { id: column.id, name: name });
             await this.load();
         } catch (e) {
             this.error = this.errorText(e);
@@ -1588,7 +1598,7 @@ Add them to the board? The files are never written to.`)) return;
 
     async saveColumn(column) {
         try {
-            await simpleApiPost("/api/ext/project-board/column/update", {
+            await simpleApiPost(`${PB_API}column/update`, {
                 id: column.id,
                 wip_limit: parseInt(this.columnForm.wip_limit || 0, 10) || 0,
                 done: !!this.columnForm.done,
@@ -1604,7 +1614,7 @@ Add them to the board? The files are never written to.`)) return;
         if (position < 0 || position >= this.columns.length) return;
 
         try {
-            await simpleApiPost("/api/ext/project-board/column/update", { id: columnId, position: position });
+            await simpleApiPost(`${PB_API}column/update`, { id: columnId, position: position });
             await this.load();
         } catch (e) {
             this.error = this.errorText(e);
@@ -1621,7 +1631,7 @@ Add them to the board? The files are never written to.`)) return;
         if (!window.confirm(`Delete the column "${column.name}"? ${extra}`)) return;
 
         try {
-            await simpleApiPost("/api/ext/project-board/column/delete", { id: column.id });
+            await simpleApiPost(`${PB_API}column/delete`, { id: column.id });
             await this.load();
         } catch (e) {
             this.error = this.errorText(e);

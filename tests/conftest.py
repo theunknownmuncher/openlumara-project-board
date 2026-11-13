@@ -26,7 +26,7 @@ ships its own copy of the two things the core test suite does with conftest.py -
 redirecting the data folder / config away from a live install, and a minimal fake
 manager. Run it from the repository root:
 
-    pytest user_modules/project-board/tests
+    pytest user_modules/openlumara-project-board/tests
 """
 
 import asyncio
@@ -39,6 +39,11 @@ import pytest
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2].parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+# -- AI GENERATED CODE (unknown model) :: (2026-11-12) status:pending-review harness:openlumara --
+# a module's name is the folder it lives in, so the suite takes it from here rather than
+# hardcoding one install's folder name
+MODULE_NAME = pathlib.Path(__file__).resolve().parents[1].name
 
 import core  # noqa: E402
 
@@ -94,10 +99,10 @@ def make_board(isolated_paths):
     def build(**settings):
         core.config.config.load({
             "core": {"data_folder": str(isolated_paths)},
-            "modules": {"settings": {"project-board": dict(settings)}},
+            "modules": {"settings": {MODULE_NAME: dict(settings)}},
         })
 
-        module = importlib.import_module("user_modules.project-board")
+        module = importlib.import_module(f"user_modules.{MODULE_NAME}")
         instance = module.ProjectBoard(FakeManager())
 
         loop = asyncio.new_event_loop()
@@ -114,7 +119,7 @@ def make_board(isolated_paths):
 @pytest.fixture
 def board(board_manager):
     """a ProjectBoard with its storage created fresh in the tmp data folder"""
-    module = importlib.import_module("user_modules.project-board")
+    module = importlib.import_module(f"user_modules.{MODULE_NAME}")
 
     instance = module.ProjectBoard(board_manager)
 

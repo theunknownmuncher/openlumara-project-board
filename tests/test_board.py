@@ -19,7 +19,7 @@
 
 # -- AI GENERATED CODE (Qwen3.8 Flash Next) :: (2026-10-26) harness:openlumara status:reviewed
 """
-user_modules/project-board - the board's whole tool surface, its webui routes and
+The board's whole tool surface, its webui routes and
 the prompts derived from it.
 
 integration level: the real module on a FakeManager, real tmp-dir StorageLists.
@@ -46,7 +46,7 @@ import re
 
 import pytest
 
-from conftest import FakeManager  # noqa: F401  (kept for debugging in isolation)
+from conftest import FakeManager, MODULE_NAME, REPO_ROOT  # noqa: F401  (kept for debugging in isolation)
 
 
 def column(board, name):
@@ -85,7 +85,7 @@ async def test_a_board_without_default_columns_starts_without_any(board, monkeyp
 
     monkeypatch.setattr(board.config, "get", lambda *args, **kwargs: [])
 
-    fresh = importlib.import_module("user_modules.project-board").ProjectBoard(FakeManager())
+    fresh = importlib.import_module(f"user_modules.{MODULE_NAME}").ProjectBoard(FakeManager())
     fresh.config = board.config
     await fresh.on_ready()
 
@@ -588,6 +588,30 @@ def test_the_panel_hands_the_chat_scroll_position_back():
     assert "ui.updateMounts()" in script, "the lazy mounts are nudged along while it settles"
     assert "selectedChat" in script, "a chat switched underneath the board is left alone"
     assert "{ bottom: true }" in script, "a chat with nothing to hand back goes to its newest"
+
+
+# -- AI GENERATED CODE (unknown model) :: (2026-11-12) status:pending-review harness:openlumara --
+def test_no_shipped_webui_file_names_the_install_folder():
+    """the webui extension system namespaces everything by the folder the module happens to
+    be installed as: its api lives at /api/ext/<that name>/ and a module template can only
+    reach its own files under that same name. hardcoding one install's folder name therefore
+    blanks the panel on a stock install, which is what these two checks keep out"""
+    module_dir = pathlib.Path(__file__).resolve().parents[1]
+    core_templates = REPO_ROOT / "channels" / "webui" / "templates"
+    script = (module_dir / "webui" / "assets" / "js" / "project_board.js").read_text()
+
+    # the panel derives its api base from the url it was served from, so no url may name a folder
+    assert not re.search(r"/api/ext/[A-Za-z0-9]", script), "an api url hardcodes the module folder"
+    assert script.count("${PB_API}") == len(re.findall(r"simpleApi(?:Post|Fetch)\(", script)), \
+        "and every call is built off that base"
+
+    for template in sorted((module_dir / "webui" / "templates").rglob("*.html")):
+        for name in re.findall(r"{%\s*include\s+'([^']+)'", template.read_text()):
+            assert not name.startswith(f"{MODULE_NAME}/"), \
+                f"{template.name} reaches for its own files by folder name: {name}"
+            if core_templates.is_dir():
+                assert (core_templates / name).is_file(), \
+                    f"{template.name} includes {name}, which openlumara does not ship"
 
 
 async def test_card_routes_roundtrip(board):

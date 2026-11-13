@@ -8,7 +8,10 @@
 <button type="button" class="btn pb-header-btn" :class="{ 'active': $store.projectBoard.open }"
         :title="$store.projectBoard.open ? 'Back to the chat (Esc)' : 'Show the project board: ' + $store.projectBoard.activeBoardName()"
         @click="$store.projectBoard.toggle()">
-    {% include 'project-board/svg/board.svg' %}
+    {# the board mark, inlined: a module template can only include its own files under the
+       folder name it happens to be installed as, which would break on a stock install #}
+    {# -- AI GENERATED CODE (unknown model) :: (2026-11-12) status:pending-review harness:openlumara -- #}
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="9.5" y="4" width="5" height="10" rx="1"/><rect x="16" y="4" width="5" height="13" rx="1"/></svg>
     <span class="pb-header-count" x-show="$store.projectBoard.stats && $store.projectBoard.stats.total"
           x-text="$store.projectBoard.stats ? $store.projectBoard.stats.total : ''" x-cloak></span>
 </button>

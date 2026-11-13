@@ -197,7 +197,9 @@ holds open cards only, capped by `max_cards_in_prompt`.
 1. Put this folder in OpenLumara's user modules directory
    (default `openlumara/user_modules/`, or wherever `user_modules.path` points).
 2. Restart OpenLumara.
-3. Enable it: `/module project-board` (then `/restart`), or tick it in the WebUI settings.
+3. Enable it: `/module openlumara-project-board` (then `/restart`), or tick it in the WebUI
+   settings. A module's name is the folder it lives in, so if you rename the folder, use that
+   name - the panel and its API follow the folder name automatically.
 
 No Python dependencies. With the WebUI channel enabled the board panel appears in the chat
 header; on other channels (`/board`, cli, telegram, …) the tools and the commands still work.
@@ -222,13 +224,12 @@ header; on other channels (`/board`, cli, telegram, …) the tools and the comma
 ## Files
 
 ```
-module.py                                       <- module: tools, commands, prompt, /api/ext/project-board routes, openspec reader
+module.py                                       <- module: tools, commands, prompt, /api/ext routes, openspec reader
 webui/templates/chat/index.html                 <- the board panel (below_header slot: it takes the chat panel over)
 webui/templates/chat/header.html                <- chat header toggle button (right slot)
 webui/templates/modals/project_board_card.html  <- card dialog (fields, comments, play buttons)
 webui/templates/modals/project_board_actions.html <- prompt action editor (your templates + the examples)
 webui/templates/modals/project_board_spec.html  <- process spec dialog (paste a spec, preview, fill the chat)
-webui/templates/svg/board.svg                   <- board icon used by the header button
 webui/assets/js/project_board.js                <- panel logic (Alpine store "projectBoard"), boards, drag & drop, keyboard
 webui/assets/css/project_board.css              <- board + dialog styles (everything is namespaced under .pb-)
 tests/conftest.py                               <- self-contained fixtures (tmp data folder, fake manager)
@@ -240,7 +241,7 @@ README.md                                       <- this file
 .gitignore                                      <- python/editor/OS artifacts
 ```
 
-Run the suite with `pytest user_modules/project-board/tests`. The module ships its own
+Run the suite with `pytest user_modules/openlumara-project-board/tests`. The module ships its own
 `pytest.ini`, so that works from anywhere and needs nothing from openlumara's own pytest config.
 
 Board data lives in OpenLumara's data folder, as plain JSON you can eyeball or hand-edit:
