@@ -2063,3 +2063,33 @@ async def test_a_press_cannot_be_made_while_the_feature_is_off(board):
     assert launched["status"] == "error"
     assert board.cards[0]["column"] == column(board, "Backlog")["id"], "the card did not move"
     assert not board.cards[0].get("comments"), "and nothing was logged"
+
+
+async def test_prompts_name_the_tools_the_install_actually_has(board):
+    """a tool's public name is <the folder the module sits in>_<method>, so prompt text naming
+    our own tools has to be written out at the moment it reaches the AI: upstream ships this repo
+    as openlumara-project-board, and telling the AI to call project-board_import_openspec there
+    sends it hunting for a tool that is not in its catalog"""
+    await add(board, "Add the toggle")
+    card = board.cards[0]["id"]
+    identifier = await action(board, name="Split it",
+                              template="add the pieces with project-board_add_cards")
+
+    assert board.name != "openlumara-project-board", "the fixture is not installed under that name"
+    board.name = "openlumara-project-board"
+
+    rendered = (await board._play_action(identifier, card))["content"]["prompt"]
+    assert "openlumara-project-board_add_cards" in rendered
+    assert "project-board_add_cards" not in rendered.replace("openlumara-project-board_add_cards", "")
+
+    templates = " ".join(entry["template"] for entry in (await board._route_actions_examples())["examples"])
+    assert "openlumara-project-board_add_cards" in templates
+    assert not templates.replace("openlumara-project-board_", "").count("project-board_"), \
+        "no shipped example may offer a tool name the install does not have"
+
+    spec = await board._route_spec_render({"title": "Passkeys", "spec": "log in with a passkey"})
+    assert "openlumara-project-board_import_openspec" in spec["prompt"]
+
+    # the development folder is what the text already says, so nothing is rewritten there
+    board.name = "project-board"
+    assert "project-board_add_cards" in (await board._play_action(identifier, card))["content"]["prompt"]

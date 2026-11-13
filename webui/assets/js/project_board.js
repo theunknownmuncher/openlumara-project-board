@@ -1091,14 +1091,14 @@ const PROJECT_BOARD = {
         this.openMenu = "";
 
         try {
-            const rendered = await simpleApiPost("/api/ext/project-board/action/render", {
+            const rendered = await simpleApiPost(`${PB_API}action/render`, {
                 action: action.id,
                 card: card.id,
             });
 
             this.prefillChat(rendered.prompt);
 
-            await simpleApiPost("/api/ext/project-board/action/launched", {
+            await simpleApiPost(`${PB_API}action/launched`, {
                 action: action.id,
                 card: card.id,
                 prompt: rendered.prompt,
@@ -1117,7 +1117,7 @@ const PROJECT_BOARD = {
         this.openMenu = "";
 
         try {
-            const rendered = await simpleApiPost("/api/ext/project-board/action/render", {
+            const rendered = await simpleApiPost(`${PB_API}action/render`, {
                 action: action.id,
                 card: card.id,
             });
@@ -1253,7 +1253,7 @@ const PROJECT_BOARD = {
         if (this.examples.length) return this.examples;
 
         try {
-            const data = await simpleApiFetch("/api/ext/project-board/actions/examples");
+            const data = await simpleApiFetch(`${PB_API}actions/examples`);
             this.examples = data.examples || [];
         } catch (e) {
             this.error = this.errorText(e);
@@ -1341,11 +1341,11 @@ const PROJECT_BOARD = {
 
         try {
             if (this.actionEditor && this.actionEditor.id) {
-                await simpleApiPost("/api/ext/project-board/action/save", {
+                await simpleApiPost(`${PB_API}action/save`, {
                     ...payload, id: this.actionEditor.id,
                 });
             } else {
-                await simpleApiPost("/api/ext/project-board/action/save", payload);
+                await simpleApiPost(`${PB_API}action/save`, payload);
             }
 
             await this.load();
@@ -1362,7 +1362,7 @@ const PROJECT_BOARD = {
         if (!window.confirm(`Delete the prompt action "${action.name}"? The cards stay.`)) return;
 
         try {
-            await simpleApiPost("/api/ext/project-board/action/delete", { id: action.id });
+            await simpleApiPost(`${PB_API}action/delete`, { id: action.id });
             await this.load();
 
             if (this.actionEditor && this.actionEditor.id === action.id) this.newAction();
@@ -1379,7 +1379,7 @@ const PROJECT_BOARD = {
         if (index < 0 || target < 0 || target >= this.actions.length) return;
 
         try {
-            await simpleApiPost("/api/ext/project-board/action/save", { id: action.id, order: target });
+            await simpleApiPost(`${PB_API}action/save`, { id: action.id, order: target });
             await this.load();
 
             const moved = this.actions.find(entry => entry.id === action.id);
@@ -1429,7 +1429,7 @@ const PROJECT_BOARD = {
     },
 
     async renderSpec() {
-        return simpleApiPost("/api/ext/project-board/spec/render", {
+        return simpleApiPost(`${PB_API}spec/render`, {
             title: this.specDraft.title,
             spec: this.specDraft.spec,
         });
@@ -1498,7 +1498,7 @@ const PROJECT_BOARD = {
         this.openspecLoading = true;
 
         try {
-            const data = await simpleApiFetch("/api/ext/project-board/openspec/changes");
+            const data = await simpleApiFetch(`${PB_API}openspec/changes`);
 
             // the unit chosen in the strip is a browser preference, the rest comes from settings
             this.openspec = Object.assign({}, this.openspec, data, {
@@ -1528,14 +1528,14 @@ const PROJECT_BOARD = {
                        as_epic: !!this.openspec.as_epic };
 
         try {
-            const plan = await simpleApiPost("/api/ext/project-board/openspec/import",
+            const plan = await simpleApiPost(`${PB_API}openspec/import`,
                                              { ...base, dry_run: true });
 
             if (!window.confirm(`${change.id} -> ${this.openspec.unit} cards\n\n${plan}
 
 Add them to the board? The files are never written to.`)) return;
 
-            const result = await simpleApiPost("/api/ext/project-board/openspec/import", base);
+            const result = await simpleApiPost(`${PB_API}openspec/import`, base);
 
             this.openspecNote = String(result).split("\n")[0];
             await this.load();

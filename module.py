@@ -2667,7 +2667,7 @@ class ProjectBoard(core.module.Module):
         cards = self._column_cards(action["column"]) if action.get("column") else self.cards
 
         for card in cards:
-            return _render(action.get("template", ""), self._card_values(card))
+            return self._prompt(action.get("template", ""), self._card_values(card))
 
         return ""
 
@@ -2679,6 +2679,22 @@ class ProjectBoard(core.module.Module):
                     "no play buttons to configure - the user can turn them back on in the settings")
 
         return ""
+
+    def _renamed(self, text):
+        """a tool's public name is <the folder the module sits in>_<method> (core/tool_loader), so
+        text that names our own tools has to say the installed folder's name. upstream ships this
+        repo as openlumara-project-board, and a prompt telling the AI to call
+        project-board_import_openspec there sends it after a tool that is not in its catalog.
+        the shipped wording names the development folder, and this rewrites it once - at the point
+        where the words reach a human or the AI - so nothing has to be stored differently"""
+        text = str(text or "")
+        mine = f"{getattr(self, 'name', '')}_"
+
+        return text if mine == "project-board_" else text.replace("project-board_", mine)
+
+    def _prompt(self, text, values):
+        """render a template for the chat, with our own tool names spelled the installed way"""
+        return _render(self._renamed(text), values)
 
     async def _play_action(self, action_ref, card_ref):
         """what the panel's play button does: render the template for the card, then apply the
@@ -2700,7 +2716,7 @@ class ProjectBoard(core.module.Module):
             return self.result(self._not_found("prompt action", action_ref, problem), success=False)
         action = self._actions_of(self.board)[action_index]
 
-        prompt = _render(action.get("template", ""), self._card_values(card))
+        prompt = self._prompt(action.get("template", ""), self._card_values(card))
 
         return self.result({
             "action": action["id"],
@@ -2735,7 +2751,7 @@ class ProjectBoard(core.module.Module):
         done = []
 
         if action.get("log_as_comment"):
-            text = str(prompt or _render(action.get("template", ""), self._card_values(card))).strip()
+            text = str(prompt or self._prompt(action.get("template", ""), self._card_values(card))).strip()
             if text:
                 card.setdefault("comments", []).append({
                     "id": str(ulid.ULID()),
@@ -3678,7 +3694,8 @@ class ProjectBoard(core.module.Module):
         """the templates the action editor offers as a starting point. served from the same
         constant the AI's list_prompt_action_examples reads, so the panel and your AI always
         describe the same set of examples"""
-        return {"examples": [dict(example) for example in ACTION_EXAMPLES],
+        return {"examples": [dict(example, template=self._renamed(example["template"]))
+                    for example in ACTION_EXAMPLES],
                 "placeholders": list(CARD_PLACEHOLDERS)}
 
     @webui.route("action/save", method="POST")
@@ -3739,7 +3756,7 @@ class ProjectBoard(core.module.Module):
         if not spec:
             return None, "there is no spec in there yet - paste or type it first"
 
-        return _render(self.config.get("spec_action_prompt") or DEFAULT_SPEC_PROMPT, {
+        return self._prompt(self.config.get("spec_action_prompt") or DEFAULT_SPEC_PROMPT, {
             "title": str(title or "").strip() or "Untitled spec",
             "spec": spec,
             "board": self.board["name"] if self.board else "",
